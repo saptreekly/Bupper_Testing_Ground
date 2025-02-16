@@ -1,0 +1,87 @@
+from qaoa_core import QAOACircuit
+from qubo_formulation import QUBOFormulation
+from circuit_visualization import CircuitVisualizer
+from optimization import QAOAOptimizer
+from utils import Utils
+import numpy as np
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def main():
+    try:
+        # Problem parameters
+        n_cities = 4
+        qaoa_depth = 2
+
+        logger.info("Generating random cities...")
+        coordinates = Utils.generate_random_cities(n_cities)
+
+        logger.info("Creating QUBO formulation...")
+        qubo = QUBOFormulation(n_cities)
+        distance_matrix = qubo.create_distance_matrix(coordinates)
+        qubo_matrix = qubo.create_qubo_matrix(distance_matrix)
+
+        # Initialize QAOA circuit
+        n_qubits = n_cities * n_cities  # Binary variable for each city-position combination
+        logger.info(f"Initializing QAOA circuit with {n_qubits} qubits and depth {qaoa_depth}")
+        circuit = QAOACircuit(n_qubits, depth=qaoa_depth)
+
+        # Create cost Hamiltonian terms from QUBO matrix
+        cost_terms = []
+        for i in range(n_qubits):
+            for j in range(i, n_qubits):
+                if qubo_matrix[i, j] != 0:
+                    cost_terms.append((float(qubo_matrix[i, j]), [f"Z{i}", f"Z{j}"]))
+
+        logger.info(f"Created {len(cost_terms)} cost Hamiltonian terms")
+
+        # Initialize optimizer and visualizer
+        logger.info("Initializing optimizer and visualizer...")
+        optimizer = QAOAOptimizer(circuit.circuit, 2 * qaoa_depth)
+        visualizer = CircuitVisualizer()
+
+        # Optimize circuit parameters
+        logger.info("Starting optimization process...")
+        optimal_params, cost_history = optimizer.optimize(
+            cost_terms,
+            max_iterations=50,  # Reduced for initial testing
+            learning_rate=0.05  # Adjusted for better convergence
+        )
+
+        logger.info("Optimization completed. Getting final measurements...")
+        final_state = circuit.circuit(optimal_params, cost_terms)
+
+        # Convert continuous results to binary solution
+        binary_solution = [1 if x > 0 else 0 for x in final_state]
+
+        # Decode solution to get route
+        logger.info("Decoding solution...")
+        route = qubo.decode_solution(binary_solution)
+
+        # Verify and visualize solution
+        if Utils.verify_solution(route, n_cities):
+            logger.info("Valid solution found!")
+            print(f"Optimal route: {route}")
+
+            # Calculate route length
+            route_length = Utils.calculate_route_length(route, distance_matrix)
+            print(f"Route length: {route_length:.2f}")
+
+            # Visualize results
+            logger.info("Generating visualizations...")
+            visualizer.plot_circuit_results(final_state, "Final Quantum State")
+            visualizer.plot_optimization_trajectory(cost_history)
+            visualizer.plot_route(coordinates, route)
+        else:
+            logger.warning("Invalid solution found. Try adjusting parameters.")
+            print("Invalid solution found. Try adjusting parameters.")
+
+    except Exception as e:
+        logger.error(f"An error occurred: {str(e)}", exc_info=True)
+        raise
+
+if __name__ == "__main__":
+    main()

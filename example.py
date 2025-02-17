@@ -232,20 +232,19 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         optimization_start = time.time()
         steps = min(100, n_qubits * 5)
 
+        # Backend-specific optimization
         if backend == 'qiskit':
-            # For Qiskit backend, we don't use callback
+            # For Qiskit backend, we use its native interface
             params, costs = circuit.optimize(cost_terms, steps=steps)
             # Check cancellation after optimization
             if check_cancelled and check_cancelled():
                 raise RuntimeError("Optimization cancelled by user")
         else:
-            # For other backends, we can use callback
-            def optimization_callback(step, cost):
-                if check_cancelled and check_cancelled():
-                    raise RuntimeError("Optimization cancelled by user")
-                return True
-
-            params, costs = circuit.optimize(cost_terms, steps=steps, callback=optimization_callback)
+            # For PennyLane backend, we use direct optimization without callback
+            params, costs = circuit.optimize(cost_terms, steps=steps)
+            # Check cancellation after optimization is complete
+            if check_cancelled and check_cancelled():
+                raise RuntimeError("Optimization cancelled by user")
 
         metrics['optimization_time'] = time.time() - optimization_start
         logger.info(f"Optimization completed in {metrics['optimization_time']:.3f}s")

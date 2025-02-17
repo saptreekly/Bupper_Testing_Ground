@@ -218,22 +218,35 @@ def main():
 
         # Time the quantum solution
         start_time = time.time()
-        # Initialize circuit with minimal parameters
         circuit = QAOACircuit(n_qubits, depth=1)
         logger.info("Initialized QAOA circuit with %d qubits", n_qubits)
 
-        # Create cost terms with increased threshold
-        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=0.5)  # Reduced penalty
-        cost_terms = []
-        for i in range(n_qubits):
-            for j in range(i, n_qubits):
-                if abs(qubo_matrix[i, j]) > 1e-2:  # Increased threshold
-                    cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
+        # Create QUBO matrix with adjusted parameters
+        logger.info("Creating QUBO matrix...")
+        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)  # Increased penalty
 
-        logger.info("Number of cost terms: %d", len(cost_terms))
+        # Generate cost terms with adjusted threshold
+        cost_terms = []
+        max_coeff = np.max(np.abs(qubo_matrix))
+        threshold = max_coeff * 0.001  # Lower threshold to 0.1% of max coefficient
+        logger.info(f"Max coefficient: {max_coeff:.6f}, Threshold: {threshold:.6f}")
+
+        n_terms_added = 0
+        for i in range(n_qubits):
+            for j in range(i + 1, n_qubits):  # Only upper triangle
+                if abs(qubo_matrix[i, j]) > threshold:
+                    cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
+                    n_terms_added += 1
+                    logger.debug(f"Added cost term: ({i},{j}) with coefficient {qubo_matrix[i,j]:.6f}")
+
+        logger.info("Generated %d cost terms from QUBO matrix", n_terms_added)
+        if n_terms_added == 0:
+            logger.error("No cost terms generated. QUBO matrix might be too sparse or threshold too high.")
+            return
+
         logger.info("Starting QAOA optimization...")
 
-        # Run optimization with minimal parameters
+        # Run optimization
         params, costs = circuit.optimize(cost_terms, steps=10)
         measurements = circuit.circuit(params, cost_terms)
         binary_solution = decode_measurements(measurements, n_cities)

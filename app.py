@@ -6,6 +6,7 @@ import logging
 import traceback
 import time
 from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask_socketio import SocketIO, emit
 from example import benchmark_optimization
 import threading
 
@@ -65,9 +66,26 @@ if not os.path.exists(static_dir):
     logger.info(f"Created static directory at {static_dir}")
 
 app = Flask(__name__, static_folder='static')
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Store active optimization tasks
 active_tasks = {}
+
+def emit_progress(task_id, message, data=None):
+    """Emit progress update via WebSocket"""
+    update = {
+        'message': message,
+        'timestamp': time.strftime('%H:%M:%S'),
+        'data': data
+    }
+    socketio.emit(f'optimization_progress_{task_id}', update)
+    logger.info(f"Progress update for task {task_id}: {message}")
+
+def optimization_progress_callback(task_id):
+    """Create a callback function for the optimization process"""
+    def callback(stage, data):
+        emit_progress(task_id, stage, data)
+    return callback
 
 @app.route('/')
 def index():
@@ -105,6 +123,7 @@ def optimize():
         location = data.get('location', 'San Francisco, California, USA')
         backend = data.get('backend', 'qiskit')
         hybrid = data.get('hybrid', False)
+        task_id = str(time.time())
 
         logger.info(f"Starting optimization with {n_cities} cities, {n_vehicles} vehicles in {location}")
 
@@ -121,7 +140,7 @@ def optimize():
                 hybrid=hybrid,
                 max_steps=max_steps,
                 timeout=timeout,
-                check_cancelled=None
+                progress_callback=optimization_progress_callback(task_id)
             )
 
             # Generate map files
@@ -204,6 +223,7 @@ def optimize():
 
         except Exception as opt_error:
             logger.error(f"Optimization error: {str(opt_error)}")
+            emit_progress(task_id, "Error", {"error": str(opt_error)})
             return jsonify({
                 'success': False,
                 'error': str(opt_error)
@@ -218,30 +238,29 @@ def optimize():
 
 if __name__ == '__main__':
     try:
-        port = 3000  # Set fixed port
+        port = 3000
         max_retries = 3
         retry_count = 0
 
         while retry_count < max_retries:
-            # Try to clean up the port first
             if is_port_in_use(port):
                 logger.info(f"Port {port} is in use, attempting to clean up...")
                 cleanup_port(port)
 
-            # Double check if the port is now available
             if not is_port_in_use(port):
-                logger.info(f"Starting Flask server on port {port}")
-                app.run(
+                logger.info(f"Starting Flask server with SocketIO on port {port}")
+                socketio.run(
+                    app,
                     host='0.0.0.0',
                     port=port,
                     debug=False,
-                    use_reloader=False  # Disable reloader to avoid duplicate processes
+                    use_reloader=False
                 )
                 break
 
             retry_count += 1
             logger.warning(f"Port {port} still in use after cleanup attempt {retry_count}")
-            time.sleep(2)  # Wait before retrying
+            time.sleep(2)
         else:
             raise RuntimeError(f"Could not free up port {port} after {max_retries} attempts")
 

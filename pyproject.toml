@@ -29,4 +29,8 @@ dependencies = [
     "requests>=2.32.3",
     "scikit-learn>=1.6.1",
     "openai>=1.63.2",
+    "flask-socketio>=5.5.1",
+    "python-socketio>=5.12.1",
+    "python-engineio>=4.11.2",
+    "simple-websocket>=1.1.0",
 ]

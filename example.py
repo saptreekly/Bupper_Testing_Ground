@@ -159,7 +159,7 @@ import numpy as np
 
 def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
                          backend: str, hybrid: bool = False, max_steps: int = 10,
-                         timeout: int = 60, check_cancelled=None) -> Dict[str, Any]:
+                         timeout: int = 60, progress_callback=None) -> Dict[str, Any]:
     metrics = {}
     start_time = time.time()
 
@@ -171,22 +171,24 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         if total_qubits > max_qubits:
             raise ValueError(f"Problem size too large: {total_qubits} qubits required, but maximum is {max_qubits} for {backend} backend. Please reduce number of cities or vehicles.")
 
+        if progress_callback:
+            progress_callback("Initializing street network", {"status": "Generating city locations"})
+
         coordinates, nodes, network = generate_street_network_cities(n_cities, place_name)
         demands = generate_random_demands(n_cities)
         qubo = QUBOFormulation(n_cities, n_vehicles, [float('inf')] * n_vehicles, backend=backend)
         distance_matrix = network.get_distance_matrix(nodes)
 
-        # Check for cancellation after network setup
-        if check_cancelled and check_cancelled():
-            raise RuntimeError("Optimization cancelled by user")
-
         metrics['problem_setup_time'] = time.time() - start_time
         metrics['problem_size'] = {
-            'n_cities': qubo.n_cities,  # Use adjusted n_cities from QUBO
+            'n_cities': qubo.n_cities,
             'n_vehicles': n_vehicles,
-            'n_qubits': qubo.n_cities * qubo.n_cities * n_vehicles  # Use adjusted size
+            'n_qubits': qubo.n_cities * qubo.n_cities * n_vehicles
         }
         logger.info(f"Problem size metrics: {metrics['problem_size']}")
+
+        if progress_callback:
+            progress_callback("Creating QUBO matrix", {"status": "Formulating optimization problem"})
 
         start_time = time.time()
         qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)
@@ -194,9 +196,8 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         metrics['qubo_sparsity'] = np.count_nonzero(qubo_matrix) / (qubo_matrix.size)
         logger.info(f"QUBO formation metrics - Time: {metrics['qubo_formation_time']:.3f}s, Sparsity: {metrics['qubo_sparsity']:.3f}")
 
-        # Check for cancellation after QUBO formation
-        if check_cancelled and check_cancelled():
-            raise RuntimeError("Optimization cancelled by user")
+        if progress_callback:
+            progress_callback("Generating cost terms", {"status": "Processing quantum parameters"})
 
         start_time = time.time()
         n_qubits = n_cities * n_cities * n_vehicles
@@ -210,14 +211,19 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
                 if abs(qubo_matrix[i, j]) > threshold:
                     cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
 
-            # Check for cancellation periodically during cost terms generation
-            if i % 100 == 0 and check_cancelled and check_cancelled():
-                raise RuntimeError("Optimization cancelled by user")
+            if i % 100 == 0 and progress_callback:
+                progress = i / n_qubits
+                progress_callback("Processing quantum parameters", 
+                                {"status": f"Processed {i}/{n_qubits} qubits ({progress:.1%})"})
 
         metrics['cost_terms_generation_time'] = time.time() - start_time
         metrics['n_cost_terms'] = len(cost_terms)
         metrics['cost_terms_density'] = len(cost_terms) / (n_qubits * (n_qubits - 1) / 2)
         logger.info(f"Generated {len(cost_terms)} cost terms with density {metrics['cost_terms_density']:.3f}")
+
+        if progress_callback:
+            progress_callback("Initializing quantum circuit", 
+                            {"status": f"Using {backend} backend with {'hybrid' if hybrid else 'pure quantum'} optimization"})
 
         circuit_start = time.time()
         if hybrid:
@@ -233,29 +239,29 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
 
         metrics['circuit_initialization_time'] = time.time() - circuit_start
 
-        # Check for cancellation before optimization
-        if check_cancelled and check_cancelled():
-            raise RuntimeError("Optimization cancelled by user")
-
         optimization_start = time.time()
         steps = min(max_steps, n_qubits * 5)
 
-        # Backend-specific optimization
+        def optimization_callback(step, cost):
+            if progress_callback:
+                progress = step / steps
+                progress_callback("Optimizing quantum circuit", 
+                                {"status": f"Step {step}/{steps} ({progress:.1%})", 
+                                 "cost": float(cost)})
+
+        # Backend-specific optimization with progress updates
         if backend == 'qiskit':
-            # For Qiskit backend, we use its native interface
-            params, costs = circuit.optimize(cost_terms, steps=steps)
-            # Check cancellation after optimization
-            if check_cancelled and check_cancelled():
-                raise RuntimeError("Optimization cancelled by user")
+            params, costs = circuit.optimize(cost_terms, steps=steps, callback=optimization_callback)
         else:
-            # For PennyLane backend, we use direct optimization without callback
             params, costs = circuit.optimize(cost_terms, steps=steps)
-            # Check cancellation after optimization is complete
-            if check_cancelled and check_cancelled():
-                raise RuntimeError("Optimization cancelled by user")
+            if progress_callback:
+                progress_callback("Optimization complete", {"status": "Finalizing results"})
 
         metrics['optimization_time'] = time.time() - optimization_start
         logger.info(f"Optimization completed in {metrics['optimization_time']:.3f}s")
+
+        if progress_callback:
+            progress_callback("Computing final routes", {"status": "Decoding quantum solution"})
 
         solution_start = time.time()
         measurements = circuit.get_expectation_values(params, cost_terms)
@@ -284,17 +290,29 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         metrics['convergence_history'] = costs
         metrics['final_cost'] = costs[-1]
 
+        if progress_callback:
+            progress_callback("Computing classical benchmark", {"status": "Comparing with classical solution"})
+
         classical_start = time.time()
         _, classical_length = clarke_wright_savings(distance_matrix, demands, 
                                                 depot_index=0, capacity=float('inf'))
         metrics['classical_solution_time'] = time.time() - classical_start
         metrics['quantum_classical_gap'] = (total_length - classical_length) / classical_length
 
+        if progress_callback:
+            progress_callback("Optimization complete", {
+                "status": "Done",
+                "total_time": f"{metrics['total_time']:.1f}s",
+                "quantum_advantage": f"{-metrics['quantum_classical_gap']:.1%}"
+            })
+
         logger.info(f"Solution metrics - Length: {total_length:.2f}, Gap to classical: {metrics['quantum_classical_gap']:.1%}")
         return metrics
 
     except Exception as e:
         logger.error(f"Error in benchmark optimization: {str(e)}", exc_info=True)
+        if progress_callback:
+            progress_callback("Error", {"error": str(e), "status": "Failed"})
         raise
 
 def generate_street_network_cities(n_cities: int, place_name: str = "San Francisco, California, USA") -> Tuple[List[Tuple[float, float]], List[int], StreetNetwork]:

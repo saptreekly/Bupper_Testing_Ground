@@ -1,5 +1,6 @@
 {pkgs}: {
   deps = [
+    pkgs.iana-etc
     pkgs.glibcLocales
     pkgs.geos
     pkgs.spdlog

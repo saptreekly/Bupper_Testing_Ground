@@ -10,6 +10,7 @@ import random
 import math
 import matplotlib.pyplot as plt
 import traceback
+import os  # Added missing import
 
 logger = logging.getLogger(__name__)
 

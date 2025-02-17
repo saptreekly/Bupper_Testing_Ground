@@ -218,9 +218,10 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         else:
             if backend == 'qiskit':
                 circuit = QiskitQAOA(n_qubits, depth=min(2, n_cities//2))
+                logger.info(f"Initialized qiskit circuit with {n_qubits} qubits")
             else:
                 circuit = QAOACircuit(n_qubits, depth=min(2, n_cities//2))
-            logger.info(f"Initialized {backend} circuit with {n_qubits} qubits")
+                logger.info(f"Initialized {backend} circuit with {n_qubits} qubits")
 
         metrics['circuit_initialization_time'] = time.time() - circuit_start
 
@@ -229,14 +230,22 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
             raise RuntimeError("Optimization cancelled by user")
 
         optimization_start = time.time()
+        steps = min(100, n_qubits * 5)
 
-        def optimization_callback(step, cost):
+        if backend == 'qiskit':
+            # For Qiskit backend, we don't use callback
+            params, costs = circuit.optimize(cost_terms, steps=steps)
+            # Check cancellation after optimization
             if check_cancelled and check_cancelled():
                 raise RuntimeError("Optimization cancelled by user")
-            return True
+        else:
+            # For other backends, we can use callback
+            def optimization_callback(step, cost):
+                if check_cancelled and check_cancelled():
+                    raise RuntimeError("Optimization cancelled by user")
+                return True
 
-        params, costs = circuit.optimize(cost_terms, steps=min(100, n_qubits * 5), 
-                                      callback=optimization_callback if check_cancelled else None)
+            params, costs = circuit.optimize(cost_terms, steps=steps, callback=optimization_callback)
 
         metrics['optimization_time'] = time.time() - optimization_start
         logger.info(f"Optimization completed in {metrics['optimization_time']:.3f}s")
@@ -250,7 +259,6 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         metrics['routes'] = routes
         metrics['network'] = network
         metrics['nodes'] = nodes
-
 
         total_length = 0
         max_route_length = 0

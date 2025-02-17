@@ -5,7 +5,7 @@ import socket
 import logging
 import traceback
 import time
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_from_directory
 from example import benchmark_optimization
 import threading
 
@@ -77,6 +77,16 @@ def index():
         logger.error(f"Error rendering index: {str(e)}")
         return f"Error: {str(e)}", 500
 
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    """Explicitly serve files from static directory"""
+    try:
+        logger.info(f"Serving static file: {filename}")
+        return send_from_directory('static', filename)
+    except Exception as e:
+        logger.error(f"Error serving static file {filename}: {str(e)}")
+        return f"Error: {str(e)}", 404
+
 @app.route('/optimize', methods=['POST'])
 def optimize():
     try:
@@ -111,12 +121,12 @@ def optimize():
                     logger.info(f"Generated node routes: {node_routes}")
                     map_filename = f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities"
 
-                    # Ensure static directory exists
+                    # Ensure static directory exists and is writable
                     os.makedirs('static', exist_ok=True)
 
                     # Create both HTML and PNG versions
-                    map_path = f"static/{map_filename}.html"
-                    png_path = f"static/{map_filename}.png"
+                    map_path = os.path.join('static', f"{map_filename}.html")
+                    png_path = os.path.join('static', f"{map_filename}.png")
 
                     logger.info(f"Generating map files at: {map_path} and {png_path}")
 
@@ -129,7 +139,15 @@ def optimize():
                         save_path=png_path
                     )
 
-                    logger.info(f"Map files generated successfully")
+                    # Verify files were created
+                    if os.path.exists(map_path) and os.path.exists(png_path):
+                        logger.info(f"Map files generated successfully")
+                    else:
+                        logger.error(f"Failed to generate map files")
+                        return jsonify({
+                            'success': False,
+                            'error': 'Failed to generate map files'
+                        }), 500
 
                     # Create a new dictionary with only serializable data
                     serializable_metrics = {

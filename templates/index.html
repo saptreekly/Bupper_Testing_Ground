@@ -9,6 +9,12 @@
             width: 100%;
             border: 1px solid #ddd;
             margin-top: 20px;
+            position: relative;
+        }
+        #map-frame {
+            width: 100%;
+            height: 100%;
+            border: none;
         }
         .metrics-card {
             margin-top: 20px;
@@ -31,6 +37,17 @@
         .optimization-status {
             margin-top: 10px;
             font-weight: bold;
+        }
+        .map-error {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 5px;
+            display: none;
+            text-align: center;
         }
     </style>
 </head>
@@ -101,7 +118,11 @@
 
             <div class="col-md-8">
                 <div id="map-container">
-                    <iframe id="map-frame" style="width: 100%; height: 100%; border: none;"></iframe>
+                    <iframe id="map-frame" src="about:blank"></iframe>
+                    <div class="map-error" id="map-error">
+                        <p class="text-danger">Error loading map. Please try again.</p>
+                        <button class="btn btn-sm btn-primary" onclick="retryLoadMap()">Retry</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -109,6 +130,7 @@
 
     <script>
         let currentRequest = null;
+        let currentMapUrl = null;
 
         // Handle page unload/navigation/refresh
         window.addEventListener('beforeunload', function() {
@@ -127,6 +149,20 @@
             }
         });
 
+        function retryLoadMap() {
+            if (currentMapUrl) {
+                const mapFrame = document.getElementById('map-frame');
+                const mapError = document.getElementById('map-error');
+                mapError.style.display = 'none';
+                mapFrame.src = currentMapUrl;
+            }
+        }
+
+        // Handle map loading errors
+        document.getElementById('map-frame').addEventListener('error', function() {
+            document.getElementById('map-error').style.display = 'block';
+        });
+
         document.getElementById('optimize-form').addEventListener('submit', async (e) => {
             e.preventDefault();
 
@@ -138,7 +174,9 @@
 
             const form = e.target;
             const loadingOverlay = document.getElementById('loading-overlay');
+            const mapError = document.getElementById('map-error');
             loadingOverlay.style.display = 'flex';
+            mapError.style.display = 'none';
 
             const formData = {
                 n_cities: parseInt(form.n_cities.value),
@@ -168,12 +206,9 @@
                     // Update map with cache-busting parameter
                     const mapFrame = document.getElementById('map-frame');
                     const cacheBuster = new Date().getTime();
-                    const mapUrl = `${data.map_path}?_=${cacheBuster}`;
-                    console.log('Loading map from:', mapUrl);
-                    mapFrame.src = mapUrl;
-
-                    // Force iframe reload
-                    mapFrame.contentWindow.location.reload(true);
+                    currentMapUrl = `${data.map_path}?_=${cacheBuster}`;
+                    console.log('Loading map from:', currentMapUrl);
+                    mapFrame.src = currentMapUrl;
 
                     // Update metrics
                     const metricsContainer = document.getElementById('metrics-container');

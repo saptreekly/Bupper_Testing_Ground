@@ -250,7 +250,29 @@
     </div>
 
     <script>
-        const socket = io();
+        // Socket connection with error handling and logging
+        let socket = null;
+
+        function initializeSocket() {
+            console.log("Initializing socket connection...");
+            socket = io();
+
+            socket.on('connect', () => {
+                console.log('Socket connected successfully');
+            });
+
+            socket.on('connect_error', (error) => {
+                console.error('Socket connection error:', error);
+                addProgressEntry('WebSocket connection error', new Date().toLocaleTimeString(), { error: true });
+            });
+        }
+
+        // Initialize socket when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeSocket();
+            initializeCharts();
+        });
+
         let currentTaskId = null;
         let bestCost = Infinity;
         let costHistory = [];
@@ -269,6 +291,7 @@
         });
 
         function addProgressEntry(message, timestamp, data = null) {
+            console.log('Progress update received:', { message, timestamp, data }); // Debug log
             const progressLog = document.getElementById('progress-log');
             const entry = document.createElement('div');
             entry.className = `progress-entry${data?.error ? ' error' : ''}`;
@@ -309,6 +332,11 @@
                         bestCost = data.cost;
                         document.getElementById('best-cost').textContent = bestCost.toFixed(4);
                     }
+
+                    // Update live chart
+                    Plotly.extendTraces('live-optimization-chart', {
+                        y: [[data.cost]]
+                    }, [0]);
                 }
                 if (data.progress !== undefined) {
                     const progressBar = document.getElementById('optimization-progress');
@@ -357,10 +385,7 @@
 
         // Update dashboard with new optimization results
         function updateDashboard(data) {
-            // Only hide the optimization overlay after updating the dashboard
-            document.getElementById('optimization-overlay').style.display = 'none';
-
-            // Update metrics
+            // Only hide the optimization overlay after all dashboard updates
             document.getElementById('total-time').textContent = `${data.metrics.total_time.toFixed(2)}s`;
             document.getElementById('solution-length').textContent = `${data.metrics.solution_length.toFixed(2)}m`;
             document.getElementById('quantum-advantage').textContent = 
@@ -385,6 +410,9 @@
                     y: [Object.values(data.metrics.backend_times)]
                 });
             }
+
+            // Hide optimization overlay only after all updates are complete
+            document.getElementById('optimization-overlay').style.display = 'none';
         }
 
         // Handle form submission
@@ -399,8 +427,9 @@
             document.getElementById('current-cost').textContent = '-';
             document.getElementById('best-cost').textContent = '-';
             document.getElementById('optimization-progress').style.width = '0%';
+            document.getElementById('optimization-status').innerHTML = 'Initializing optimization...';
 
-            // Reset and show optimization overlay
+            // Show optimization overlay
             document.getElementById('optimization-overlay').style.display = 'block';
 
             // Reset live optimization chart
@@ -417,6 +446,7 @@
             };
 
             try {
+                console.log('Submitting optimization request:', formData); // Debug log
                 const response = await fetch('/optimize', {
                     method: 'POST',
                     headers: {
@@ -426,17 +456,19 @@
                 });
 
                 const data = await response.json();
+                console.log('Optimization response:', data); // Debug log
+
                 if (data.success) {
                     if (data.task_id) {
                         currentTaskId = data.task_id;
-                        socket.on(`optimization_progress_${data.task_id}`, (update) => {
-                            addProgressEntry(update.message, update.timestamp, update.data);
+                        console.log('Setting up socket listener for task:', currentTaskId); // Debug log
 
-                            if (update.data && update.data.cost !== undefined) {
-                                Plotly.extendTraces('live-optimization-chart', {
-                                    y: [[update.data.cost]]
-                                }, [0]);
-                            }
+                        // Remove any existing listeners for the same event
+                        socket.off(`optimization_progress_${currentTaskId}`);
+
+                        socket.on(`optimization_progress_${currentTaskId}`, (update) => {
+                            console.log('Received progress update:', update); // Debug log
+                            addProgressEntry(update.message, update.timestamp, update.data);
                         });
                     }
                     updateDashboard(data);
@@ -445,6 +477,7 @@
                     document.getElementById('optimization-overlay').style.display = 'none';
                 }
             } catch (error) {
+                console.error('Error during optimization:', error); // Debug log
                 addProgressEntry('Error during optimization: ' + error.message, new Date().toLocaleTimeString(), { error: true });
                 document.getElementById('optimization-overlay').style.display = 'none';
             }

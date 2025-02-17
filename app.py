@@ -78,8 +78,8 @@ def emit_progress(task_id, message, data=None):
         'timestamp': time.strftime('%H:%M:%S'),
         'data': data
     }
+    logger.info(f"Emitting progress for task {task_id}: {message}")  # Debug log
     socketio.emit(f'optimization_progress_{task_id}', update)
-    logger.info(f"Progress update for task {task_id}: {message}")
 
 def optimization_progress_callback(task_id):
     """Create a callback function for the optimization process"""
@@ -99,7 +99,7 @@ def optimization_progress_callback(task_id):
                 'progress': step / 100,  # Assuming 100 steps total
                 'status': 'Optimizing'
             }
-
+        logger.info(f"Progress callback for task {task_id}: {status}")  # Debug log
         emit_progress(task_id, status, data)
     return callback
 

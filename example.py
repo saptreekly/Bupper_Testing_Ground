@@ -84,20 +84,32 @@ def generate_obstacles(grid_size=16, obstacle_density=0.1):
 
 def manhattan_distance_with_obstacles(city1, city2, obstacles, grid_size):
     """Calculate path distance between two cities avoiding obstacles using A* pathfinding."""
-    def get_neighbors(pos):
-        x, y = pos
-        neighbors = []
+    logger = logging.getLogger(__name__)
+    logger.info(f"Finding path from {city1} to {city2}")
+    logger.info(f"Obstacles: {obstacles}")
 
-        # Priority order: Up, Right, Down, Left
-        # This ensures we prefer upward movement before trying rightward movement
-        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+    def get_neighbors(pos):
+        """Get valid neighboring positions."""
+        x, y = pos
+        logger.debug(f"Getting neighbors for position ({x}, {y})")
+
+        # Define moves: Up, Right, Down, Left (prioritizing vertical movement)
+        moves = [
+            (0, 1),   # Up
+            (1, 0),   # Right
+            (0, -1),  # Down
+            (-1, 0)   # Left
+        ]
+
+        neighbors = []
+        for dx, dy in moves:
             new_x, new_y = x + dx, y + dy
 
-            # Skip if outside grid
-            if new_x < 0 or new_x > grid_size or new_y < 0 or new_y > grid_size:
+            # Check grid boundaries
+            if not (0 <= new_x < grid_size and 0 <= new_y < grid_size):
                 continue
 
-            # Check for barriers based on movement direction
+            # Check obstacles based on movement direction
             blocked = False
             if dx == 0:  # Vertical movement
                 if dy > 0:  # Moving up
@@ -112,50 +124,98 @@ def manhattan_distance_with_obstacles(city1, city2, obstacles, grid_size):
 
             if not blocked:
                 neighbors.append((new_x, new_y))
+                logger.debug(f"Added valid move to ({new_x}, {new_y})")
 
         return neighbors
 
     def heuristic(pos1, pos2):
-        """Manhattan distance heuristic."""
-        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+        """Manhattan distance heuristic with vertical preference."""
+        dx = abs(pos1[0] - pos2[0])
+        dy = abs(pos1[1] - pos2[1])
+        return dy + dx * 1.1  # Prioritize vertical movement more strongly
 
-    def reconstruct_path(came_from, current):
-        path = []
-        while current is not None:
-            path.append(current)
-            current = came_from[current]
-        return path[::-1]
+    # Check if start or end is blocked
+    def is_position_blocked(pos):
+        x, y = pos
+        return any([
+            ('v', x-1, y) in obstacles,  # Left vertical wall
+            ('v', x, y) in obstacles,    # Right vertical wall
+            ('h', x, y-1) in obstacles,  # Bottom horizontal wall
+            ('h', x, y) in obstacles     # Top horizontal wall
+        ])
 
-    # A* search implementation
-    start, goal = city1, city2
-    frontier = []
-    heappush(frontier, (0, start))
+    if is_position_blocked(city1) or is_position_blocked(city2):
+        logger.warning("Start or end position is blocked by obstacles")
+        return grid_size * 10, []
+
+    # Initialize A* search
+    start = city1
+    goal = city2
+    frontier = [(0, start)]
     came_from = {start: None}
     cost_so_far = {start: 0}
-    visited = set()
 
     while frontier:
-        _, current = heappop(frontier)
+        current = min(frontier, key=lambda x: x[0])[1]
+        frontier = [(f, n) for f, n in frontier if n != current]
 
         if current == goal:
-            return cost_so_far[goal], reconstruct_path(came_from, current)
+            path = []
+            pos = current
+            while pos is not None:
+                path.append(pos)
+                pos = came_from[pos]
+            path.reverse()
 
-        if current in visited:
-            continue
+            # Verify path doesn't cross obstacles
+            valid = True
+            for i in range(len(path) - 1):
+                curr_x, curr_y = path[i]
+                next_x, next_y = path[i + 1]
 
-        visited.add(current)
+                if curr_x == next_x:  # Vertical movement
+                    if next_y > curr_y:  # Moving up
+                        if ('h', curr_x, curr_y) in obstacles:
+                            valid = False
+                            break
+                    else:  # Moving down
+                        if ('h', curr_x, next_y) in obstacles:
+                            valid = False
+                            break
+                else:  # Horizontal movement
+                    if next_x > curr_x:  # Moving right
+                        if ('v', curr_x, curr_y) in obstacles:
+                            valid = False
+                            break
+                    else:  # Moving left
+                        if ('v', next_x, curr_y) in obstacles:
+                            valid = False
+                            break
 
+            if valid:
+                logger.info(f"Found valid path: {path}")
+                return len(path) - 1, path
+            else:
+                logger.warning("Found path crosses obstacles")
+                return grid_size * 10, []
+
+        # Check neighbors
         for next_pos in get_neighbors(current):
             new_cost = cost_so_far[current] + 1
 
             if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
                 cost_so_far[next_pos] = new_cost
                 priority = new_cost + heuristic(next_pos, goal)
-                heappush(frontier, (priority, next_pos))
+                frontier.append((priority, next_pos))
                 came_from[next_pos] = current
 
-    # No valid path found - return high cost
-    logger.warning(f"No valid path found between cities at {start} and {goal}")
+        # If frontier is empty or too many positions explored, no valid path exists
+        if not frontier or len(cost_so_far) >= grid_size * grid_size:
+            logger.warning("No valid path found between cities")
+            return grid_size * 10, []
+
+    # No path found
+    logger.warning("No valid path found between cities")
     return grid_size * 10, []
 
 def decode_measurements(measurements, n_cities):

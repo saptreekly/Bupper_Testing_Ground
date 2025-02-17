@@ -6,7 +6,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 class QAOACircuit:
-    def __init__(self, n_qubits: int, depth: int = 1):
+    def __init__(self, n_qubits: int, depth: int = 2):
         """Initialize QAOA circuit."""
         self.n_qubits = n_qubits
         self.depth = depth
@@ -22,7 +22,7 @@ class QAOACircuit:
             raise
 
     def _circuit_implementation(self, params, cost_terms):
-        """Simplified QAOA circuit implementation."""
+        """Enhanced QAOA circuit implementation."""
         try:
             # Initial state
             logger.debug("Preparing initial state with %d qubits", self.n_qubits)
@@ -34,15 +34,19 @@ class QAOACircuit:
                 # Problem unitary
                 gamma = params[2*layer]
                 for coeff, (i, j) in cost_terms:
-                    if i != j:  # Skip self-interactions
+                    if i != j:
+                        # Enhanced interaction
                         qml.CNOT(wires=[i, j])
                         qml.RZ(2 * gamma * coeff, wires=j)
                         qml.CNOT(wires=[i, j])
 
-                # Mixer unitary
+                # Enhanced mixer unitary
                 beta = params[2*layer + 1]
                 for i in range(self.n_qubits):
+                    # Use stronger mixing angle
                     qml.RX(2 * beta, wires=i)
+                    # Add Y rotation for better exploration
+                    qml.RY(beta, wires=i)
 
             # Measure expectation values
             measurements = [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
@@ -53,24 +57,24 @@ class QAOACircuit:
             logger.error("Error in circuit implementation: %s", str(e))
             raise
 
-    def optimize(self, cost_terms: List[Tuple], steps: int = 100):
+    def optimize(self, cost_terms: List[Tuple], steps: int = 200):
         """Optimize QAOA parameters."""
         try:
-            # Initialize parameters
-            params = np.array([np.pi/4, np.pi/2] * self.depth)
+            # Initialize parameters with better starting points
+            gamma_init = np.linspace(0, 2*np.pi, self.depth)  # Full range for gamma
+            beta_init = np.linspace(0, np.pi, self.depth)     # Half range for beta
+            params = np.array([val for pair in zip(gamma_init, beta_init) for val in pair])
             logger.info("Initial parameters: %s", str(params))
 
             # Use Adam optimizer with careful learning rate
-            opt = qml.AdamOptimizer(stepsize=0.01)
+            opt = qml.AdamOptimizer(stepsize=0.02)
             costs = []
 
             def cost_function(params):
                 try:
-                    # Get measurements
                     measurements = np.asarray(self.circuit(params, cost_terms))
                     logger.debug("Raw measurements: %s", str(measurements))
 
-                    # Calculate cost
                     cost = 0.0
                     for coeff, (i, j) in cost_terms:
                         term = float(measurements[i]) * float(measurements[j]) * coeff
@@ -85,17 +89,17 @@ class QAOACircuit:
                     logger.error("Error in cost function: %s", str(e))
                     raise
 
-            # Optimization loop
+            # Optimization loop with improved convergence criteria
             prev_cost = float('inf')
             best_cost = float('inf')
             best_params = None
+            patience = 20  # Increased patience
+            patience_counter = 0
+            min_steps = 100  # Minimum number of steps
 
             for step in range(steps):
                 try:
-                    # Optimization step
                     params, current_cost = opt.step_and_cost(cost_function, params)
-
-                    # Convert cost to float safely
                     cost_val = float(np.asarray(current_cost))
                     costs.append(cost_val)
 
@@ -103,10 +107,13 @@ class QAOACircuit:
                     if cost_val < best_cost:
                         best_cost = cost_val
                         best_params = params.copy()
+                        patience_counter = 0
                         logger.info("New best solution - Step: %d, Cost: %.6f", step, best_cost)
+                    else:
+                        patience_counter += 1
 
-                    # Convergence check
-                    if abs(prev_cost - cost_val) < 1e-6:
+                    # Convergence check with patience and minimum steps
+                    if patience_counter >= patience and step >= min_steps:
                         logger.info("Converged at step %d", step)
                         break
 
@@ -123,7 +130,8 @@ class QAOACircuit:
             logger.error("Error during optimization: %s", str(e))
             raise
 
-    def compute_expectation(self, optimal_params: np.ndarray, cost_terms: List[Tuple]) -> float:
+    def compute_expectation(self, optimal_params: np.ndarray, 
+                          cost_terms: List[Tuple]) -> float:
         """Compute expectation value with optimal parameters."""
         try:
             measurements = np.asarray(self.circuit(optimal_params, cost_terms))

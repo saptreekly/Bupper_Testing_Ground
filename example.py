@@ -1,10 +1,9 @@
+import logging
 from qaoa_core import QAOACircuit
 from qubo_formulation import QUBOFormulation
 from circuit_visualization import CircuitVisualizer
 from utils import Utils
 import numpy as np
-import logging
-from typing import List, Tuple
 
 logging.basicConfig(
     level=logging.DEBUG,  # Changed to DEBUG for more detailed logs
@@ -14,38 +13,42 @@ logger = logging.getLogger(__name__)
 
 def main():
     try:
-        # Minimal problem size for testing
-        n_cities = 2  # Start with just 2 cities
-        qaoa_depth = 1
+        # Increase to 3 cities with higher QAOA depth
+        n_cities = 3
+        qaoa_depth = 2  # Increased depth for better optimization
 
         logger.info("Starting QAOA optimization for TSP")
         logger.info("Configuration: %d cities, QAOA depth %d", n_cities, qaoa_depth)
 
-        # Generate simple test case
-        coordinates = [(0.0, 0.0), (1.0, 0.0)]  # Two cities on x-axis
+        # Generate triangle test case
+        coordinates = [
+            (0.0, 0.0),  # First city at origin
+            (1.0, 0.0),  # Second city at (1,0)
+            (0.5, 0.866)  # Third city at equilateral triangle point
+        ]
         logger.info("Test coordinates: %s", str(coordinates))
 
         # Create QUBO formulation
         qubo = QUBOFormulation(n_cities)
         distance_matrix = qubo.create_distance_matrix(coordinates)
         logger.info("Distance matrix:\n%s", str(distance_matrix))
-        qubo_matrix = qubo.create_qubo_matrix(distance_matrix)
+        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, penalty=4.0)  # Increased penalty
         logger.info("QUBO matrix:\n%s", str(qubo_matrix))
 
-        # Initialize circuit
-        n_qubits = n_cities * n_cities
+        # Initialize circuit with more qubits
+        n_qubits = n_cities * n_cities  # Now 9 qubits for 3 cities
         circuit = QAOACircuit(n_qubits, depth=qaoa_depth)
 
-        # Create simplified cost terms
+        # Create cost terms
         cost_terms = []
         for i in range(n_qubits):
             for j in range(i, n_qubits):
                 if abs(qubo_matrix[i, j]) > 1e-10:
                     cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
-        logger.info("Cost terms: %s", str(cost_terms))
+        logger.info("Number of cost terms: %d", len(cost_terms))
 
-        # Run optimization
-        params, cost_history = circuit.optimize(cost_terms, steps=20)
+        # Run optimization with more iterations for the larger problem
+        params, cost_history = circuit.optimize(cost_terms, steps=200)  # Increased steps
         logger.info("Optimization completed")
         logger.info("Final parameters: %s", str(params))
         logger.info("Cost history: %s", str(cost_history))
@@ -62,8 +65,11 @@ def main():
             route_length = Utils.calculate_route_length(route, distance_matrix)
             logger.info("Valid solution found!")
             logger.info("Route: %s, Length: %.3f", str(route), route_length)
+
+            # Visualize the route
             visualizer = CircuitVisualizer()
             visualizer.plot_route(coordinates, route)
+            visualizer.plot_optimization_trajectory(cost_history)
         else:
             logger.warning("Invalid solution found")
 

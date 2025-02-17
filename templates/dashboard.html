@@ -413,9 +413,12 @@
             });
         }
 
-        // Update dashboard with new optimization results
         function updateDashboard(data) {
-            // Only hide the optimization overlay after all dashboard updates
+            // Hide loading overlay first
+            document.getElementById('loading-overlay').style.display = 'none';
+            // Show optimization overlay
+            document.getElementById('optimization-overlay').style.display = 'block';
+
             document.getElementById('total-time').textContent = `${data.metrics.total_time.toFixed(2)}s`;
             document.getElementById('solution-length').textContent = `${data.metrics.solution_length.toFixed(2)}m`;
             document.getElementById('quantum-advantage').textContent = 
@@ -440,9 +443,6 @@
                     y: [Object.values(data.metrics.backend_times)]
                 });
             }
-
-            // Hide optimization overlay only after all updates are complete
-            document.getElementById('optimization-overlay').style.display = 'none';
         }
 
         // Handle form submission
@@ -459,8 +459,8 @@
             document.getElementById('optimization-progress').style.width = '0%';
             document.getElementById('optimization-status').innerHTML = 'Initializing optimization...';
 
-            // Show loading overlay
-            document.getElementById('loading-overlay').style.display = 'block';
+            // Show loading overlay while setting up socket connection
+            document.getElementById('loading-overlay').style.display = 'flex';
 
             // Reset live optimization chart
             Plotly.update('live-optimization-chart', {
@@ -489,6 +489,10 @@
                 console.log('Optimization response:', data);
 
                 if (data.success) {
+                    // Hide loading overlay and show optimization overlay
+                    document.getElementById('loading-overlay').style.display = 'none';
+                    document.getElementById('optimization-overlay').style.display = 'block';
+
                     if (data.task_id) {
                         currentTaskId = data.task_id;
                         console.log('Setting up socket listener for task:', currentTaskId);

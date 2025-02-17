@@ -286,20 +286,38 @@
 
         function initializeSocket() {
             console.log("Initializing socket connection...");
-            socket = io();
+            socket = io({ 
+                transports: ['websocket'],
+                upgrade: false,
+                reconnection: true,
+                reconnectionAttempts: 5
+            });
 
             socket.on('connect', () => {
                 console.log('Socket connected successfully');
+                document.getElementById('loading-overlay').style.display = 'none';
+                document.getElementById('optimization-overlay').style.display = 'block';
+            });
+
+            socket.on('connection_established', (data) => {
+                console.log('Server confirmed connection:', data);
             });
 
             socket.on('connect_error', (error) => {
                 console.error('Socket connection error:', error);
-                addProgressEntry('WebSocket connection error', new Date().toLocaleTimeString(), { error: true });
+                addProgressEntry('WebSocket connection error: ' + error.message, new Date().toLocaleTimeString(), { error: true });
+                document.getElementById('loading-overlay').style.display = 'none';
+            });
+
+            socket.on('disconnect', () => {
+                console.log('Socket disconnected');
+                addProgressEntry('WebSocket disconnected', new Date().toLocaleTimeString(), { error: true });
             });
         }
 
         // Initialize socket when page loads
         document.addEventListener('DOMContentLoaded', () => {
+            console.log('Page loaded, initializing socket and charts...');
             initializeSocket();
             initializeCharts();
         });
@@ -322,7 +340,7 @@
         });
 
         function addProgressEntry(message, timestamp, data = null) {
-            console.log('Progress update received:', { message, timestamp, data }); // Debug log
+            console.log('Progress update received:', { message, timestamp, data });
             const progressLog = document.getElementById('progress-log');
             const entry = document.createElement('div');
             entry.className = `progress-entry${data?.error ? ' error' : ''}`;
@@ -461,6 +479,7 @@
 
             // Show loading overlay while setting up socket connection
             document.getElementById('loading-overlay').style.display = 'flex';
+            document.getElementById('optimization-overlay').style.display = 'none';
 
             // Reset live optimization chart
             Plotly.update('live-optimization-chart', {

@@ -66,41 +66,75 @@ if not os.path.exists(static_dir):
     logger.info(f"Created static directory at {static_dir}")
 
 app = Flask(__name__, static_folder='static')
-socketio = SocketIO(app, cors_allowed_origins="*")
+app.config['SECRET_KEY'] = 'secret!'
+
+# Initialize SocketIO with explicit configuration
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    logger=True,
+    engineio_logger=True,
+    ping_timeout=60,
+    ping_interval=25,
+    async_mode='threading'
+)
+
+@socketio.on_error()
+def error_handler(e):
+    logger.error(f"SocketIO error: {str(e)}")
 
 # Store active optimization tasks
 active_tasks = {}
 
+@socketio.on('connect')
+def handle_connect():
+    logger.info(f"Client connected to WebSocket from {request.sid}")
+    try:
+        emit('connection_established', {'status': 'connected'})
+    except Exception as e:
+        logger.error(f"Error in connect handler: {str(e)}")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logger.info(f"Client disconnected from WebSocket: {request.sid}")
+
 def emit_progress(task_id, message, data=None):
     """Emit progress update via WebSocket"""
-    update = {
-        'message': message,
-        'timestamp': time.strftime('%H:%M:%S'),
-        'data': data
-    }
-    logger.info(f"Emitting progress for task {task_id}: {message}")  # Debug log
-    socketio.emit(f'optimization_progress_{task_id}', update)
+    try:
+        update = {
+            'message': message,
+            'timestamp': time.strftime('%H:%M:%S'),
+            'data': data
+        }
+        logger.info(f"Emitting progress for task {task_id}: {message}")
+        socketio.emit(f'optimization_progress_{task_id}', update)
+        logger.info(f"Successfully emitted progress for task {task_id}")
+    except Exception as e:
+        logger.error(f"Error emitting progress: {str(e)}")
 
 def optimization_progress_callback(task_id):
     """Create a callback function for the optimization process"""
     def callback(step, data):
-        if isinstance(data, dict):
-            status = f"Step {step}/{data.get('total_steps', '?')}"
-            if data.get('cost') is not None:
-                status += f" - Cost: {data['cost']:.4f}"
-                if data.get('best_cost') is not None:
-                    status += f" (Best: {data['best_cost']:.4f})"
-        else:
-            # Fallback for simple cost value
-            status = f"Step {step} - Cost: {float(data):.4f}"
-            data = {
-                'step': step,
-                'cost': float(data),
-                'progress': step / 100,  # Assuming 100 steps total
-                'status': 'Optimizing'
-            }
-        logger.info(f"Progress callback for task {task_id}: {status}")  # Debug log
-        emit_progress(task_id, status, data)
+        try:
+            if isinstance(data, dict):
+                status = f"Step {step}/{data.get('total_steps', '?')}"
+                if data.get('cost') is not None:
+                    status += f" - Cost: {data['cost']:.4f}"
+                    if data.get('best_cost') is not None:
+                        status += f" (Best: {data['best_cost']:.4f})"
+            else:
+                # Fallback for simple cost value
+                status = f"Step {step} - Cost: {float(data):.4f}"
+                data = {
+                    'step': step,
+                    'cost': float(data),
+                    'progress': step / 100,  # Assuming 100 steps total
+                    'status': 'Optimizing'
+                }
+            logger.info(f"Progress callback for task {task_id}: {status}")
+            emit_progress(task_id, status, data)
+        except Exception as e:
+            logger.error(f"Error in optimization callback: {str(e)}")
     return callback
 
 @app.route('/')
@@ -270,8 +304,10 @@ if __name__ == '__main__':
                     app,
                     host='0.0.0.0',
                     port=port,
-                    debug=False,
-                    use_reloader=False
+                    debug=True,
+                    use_reloader=False,  # Disable reloader to prevent conflicts
+                    allow_unsafe_werkzeug=True,
+                    log_output=True
                 )
                 break
 

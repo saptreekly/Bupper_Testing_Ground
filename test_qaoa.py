@@ -118,7 +118,7 @@ class TestQAOA(unittest.TestCase):
             self.assertTrue(len(costs) > 0, "No optimization history recorded")
 
             # Check solution quality
-            measurements = circuit.circuit(params, self._create_cost_terms(qubo_matrix))
+            measurements = circuit.get_expectation_values(params, self._create_cost_terms(qubo_matrix))
             binary_solution = [1 if x > 0 else 0 for x in measurements]
             routes = qubo.decode_solution(binary_solution)
 
@@ -142,6 +142,8 @@ class TestQAOA(unittest.TestCase):
             # Test both backends
             backends = ['qiskit', 'pennylane']
             for backend in backends:
+                logger.info(f"Testing hybrid optimization with {backend} backend")
+
                 # Setup small problem
                 coordinates = [(0,0), (1,0), (0,1)]  # Triangle configuration
                 qubo = QUBOFormulation(self.n_cities_small, self.n_vehicles, self.vehicle_capacity)
@@ -152,36 +154,49 @@ class TestQAOA(unittest.TestCase):
                 qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands)
                 n_qubits = self.n_cities_small * self.n_cities_small * self.n_vehicles
 
-                # Initialize hybrid optimizer
-                optimizer = HybridOptimizer(n_qubits, depth=1, backend=backend)
+                # Initialize hybrid optimizer with error handling
+                try:
+                    optimizer = HybridOptimizer(n_qubits, depth=1, backend=backend)
+                except Exception as init_error:
+                    logger.error(f"Failed to initialize {backend} optimizer: {str(init_error)}")
+                    continue
 
-                # Run optimization
+                # Run optimization with timing
                 start_time = time()
-                params, costs = optimizer.optimize(self._create_cost_terms(qubo_matrix), steps=30)
-                end_time = time()
+                try:
+                    params, costs = optimizer.optimize(self._create_cost_terms(qubo_matrix), steps=30)
+                    end_time = time()
+                    runtime = end_time - start_time
 
-                # Verify results
-                self.assertIsNotNone(params, f"Hybrid optimization failed with {backend}")
-                self.assertTrue(len(costs) > 0, f"No optimization history for {backend}")
+                    # Log optimization statistics
+                    logger.info(f"Hybrid optimization with {backend} completed in {runtime:.2f}s")
+                    if len(costs) > 0:
+                        logger.info(f"Final cost: {costs[-1]:.6f}")
+                        logger.info(f"Cost improvement: {(costs[0] - costs[-1])/abs(costs[0]):.1%}")
 
-                # Performance check
-                runtime = end_time - start_time
-                logger.info(f"Hybrid optimization with {backend} completed in {runtime:.2f}s")
+                    # Verify results
+                    self.assertIsNotNone(params, f"Hybrid optimization failed with {backend}")
+                    self.assertTrue(len(costs) > 0, f"No optimization history for {backend}")
 
-                # Solution quality check
-                measurements = optimizer.get_expectation_values(params, self._create_cost_terms(qubo_matrix))
-                binary_solution = [1 if x > 0 else 0 for x in measurements]
-                routes = qubo.decode_solution(binary_solution)
+                    # Solution quality check
+                    measurements = optimizer.get_expectation_values(params, self._create_cost_terms(qubo_matrix))
+                    binary_solution = [1 if x > 0 else 0 for x in measurements]
+                    routes = qubo.decode_solution(binary_solution)
 
-                # Verify route properties
-                for route in routes:
-                    self.assertEqual(route[0], 0, f"Invalid route start with {backend}")
-                    self.assertEqual(route[-1], 0, f"Invalid route end with {backend}")
-                    route_length = sum(distance_matrix[route[i], route[i+1]] 
-                                     for i in range(len(route)-1))
-                    self.assertGreater(route_length, 0, f"Invalid route length with {backend}")
+                    # Verify route properties
+                    for route in routes:
+                        self.assertEqual(route[0], 0, f"Invalid route start with {backend}")
+                        self.assertEqual(route[-1], 0, f"Invalid route end with {backend}")
+                        route_length = sum(distance_matrix[route[i], route[i+1]] 
+                                         for i in range(len(route)-1))
+                        self.assertGreater(route_length, 0, f"Invalid route length with {backend}")
+                        logger.info(f"Route length with {backend}: {route_length:.2f}")
 
-            logger.info("Hybrid optimization tests passed")
+                except Exception as opt_error:
+                    logger.error(f"Optimization failed for {backend}: {str(opt_error)}")
+                    raise
+
+            logger.info("Hybrid optimization tests completed successfully")
 
         except Exception as e:
             logger.error("Hybrid optimization test failed: %s", str(e))

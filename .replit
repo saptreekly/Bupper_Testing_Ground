@@ -61,7 +61,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python example.py --backend qiskit --cities 6 --hybrid --qaoa-depth 2"
+args = "python example.py --backend qiskit --cities 3 --hybrid"
 
 [[workflows.workflow]]
 name = "QAOA Tests"
@@ -121,7 +121,7 @@ args = "python app.py"
 waitForPort = 3000
 
 [deployment]
-run = ["sh", "-c", "python example.py --backend qiskit --cities 6 --hybrid --qaoa-depth 2"]
+run = ["sh", "-c", "python example.py --backend qiskit --cities 3 --hybrid"]
 
 [[ports]]
 localPort = 3000

@@ -224,7 +224,7 @@ class QiskitQAOA:
         logger.info(f"Validated {len(valid_terms)} cost terms")
         return valid_terms
 
-    def optimize(self, cost_terms, steps=100):
+    def optimize(self, cost_terms, steps=100, callback=None):
         """Optimize the QAOA circuit parameters with improved convergence."""
         try:
             # Validate and normalize cost terms
@@ -276,6 +276,10 @@ class QiskitQAOA:
                     costs.append(current_cost)
                     cost_history.append(current_cost)
                     param_history.append(params.copy())
+
+                    # Call the callback function if provided
+                    if callback:
+                        callback(step, current_cost)
 
                     if current_cost < best_cost:
                         improvement = (best_cost - current_cost) / abs(best_cost) if best_cost != float('inf') else 1.0

@@ -33,7 +33,7 @@ def main():
         cost_terms = []
         for i in range(n_qubits):
             for j in range(i, n_qubits):
-                if qubo_matrix[i, j] != 0:
+                if abs(qubo_matrix[i, j]) > 1e-10:  # Add numerical threshold
                     cost_terms.append((float(qubo_matrix[i, j]), [f"Z{i}", f"Z{j}"]))
 
         logger.info(f"Created {len(cost_terms)} cost Hamiltonian terms")
@@ -45,21 +45,35 @@ def main():
 
         # Optimize circuit parameters
         logger.info("Starting optimization process...")
-        optimal_params, cost_history = optimizer.optimize(
-            cost_terms,
-            max_iterations=50,  # Reduced for initial testing
-            learning_rate=0.05  # Adjusted for better convergence
-        )
+        try:
+            optimal_params, cost_history = optimizer.optimize(
+                cost_terms,
+                max_iterations=50,
+                learning_rate=0.05,
+                tolerance=1e-4
+            )
+            logger.info("Optimization completed successfully")
+        except Exception as e:
+            logger.error(f"Optimization failed: {str(e)}")
+            raise
 
-        logger.info("Optimization completed. Getting final measurements...")
-        final_state = circuit.circuit(optimal_params, cost_terms)
+        # Get final measurements
+        logger.info("Getting final measurements...")
+        try:
+            final_state = circuit.circuit(optimal_params, cost_terms)
+            logger.info("Final measurements obtained successfully")
+        except Exception as e:
+            logger.error(f"Error getting final measurements: {str(e)}")
+            raise
 
         # Convert continuous results to binary solution
         binary_solution = [1 if x > 0 else 0 for x in final_state]
+        logger.info(f"Binary solution found: {binary_solution}")
 
         # Decode solution to get route
         logger.info("Decoding solution...")
         route = qubo.decode_solution(binary_solution)
+        logger.info(f"Decoded route: {route}")
 
         # Verify and visualize solution
         if Utils.verify_solution(route, n_cities):
@@ -72,9 +86,14 @@ def main():
 
             # Visualize results
             logger.info("Generating visualizations...")
-            visualizer.plot_circuit_results(final_state, "Final Quantum State")
-            visualizer.plot_optimization_trajectory(cost_history)
-            visualizer.plot_route(coordinates, route)
+            try:
+                visualizer.plot_circuit_results(final_state, "Final Quantum State")
+                visualizer.plot_optimization_trajectory(cost_history)
+                visualizer.plot_route(coordinates, route)
+                logger.info("Visualizations generated successfully")
+            except Exception as e:
+                logger.error(f"Error generating visualizations: {str(e)}")
+                raise
         else:
             logger.warning("Invalid solution found. Try adjusting parameters.")
             print("Invalid solution found. Try adjusting parameters.")

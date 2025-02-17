@@ -37,7 +37,7 @@ class QAOACircuit:
             cost_terms (List[Tuple]): Cost Hamiltonian terms
 
         Returns:
-            Array: Measurement results
+            List[float]: Cost expectation value
         """
         try:
             # Initialize in superposition
@@ -45,16 +45,39 @@ class QAOACircuit:
                 qml.Hadamard(wires=i)
 
             # Apply QAOA layers
-            params = qml.numpy.array(params, requires_grad=True)
             for layer in range(self.depth):
                 gamma = params[2 * layer]
                 beta = params[2 * layer + 1]
                 self._qaoa_layer(gamma, beta, cost_terms)
 
-            # Return expectation values
-            return qml.expval(sum(qml.PauliZ(i) for i in range(self.n_qubits)))
+            # Create cost Hamiltonian operator
+            cost_op = sum(coeff * self._create_pauli_product(pauli_terms)
+                         for coeff, pauli_terms in cost_terms)
+
+            # Return expectation value as a measurement observable
+            measurement = qml.expval(cost_op)
+            logger.debug(f"Raw measurement type: {type(measurement)}")
+            logger.debug(f"Raw measurement value: {measurement}")
+
+            # Return as list to maintain PennyLane's measurement format
+            return [measurement]
+
         except Exception as e:
             logger.error(f"Error in circuit execution: {str(e)}")
+            raise
+
+    def _create_pauli_product(self, pauli_terms):
+        """Helper function to create a product of Pauli operators"""
+        try:
+            operators = [qml.PauliZ(int(term[1:])) for term in pauli_terms]
+            if not operators:
+                return qml.Identity(0)
+            result = operators[0]
+            for op in operators[1:]:
+                result = result @ op
+            return result
+        except Exception as e:
+            logger.error(f"Error creating Pauli product: {str(e)}")
             raise
 
     def _qaoa_layer(self, gamma: float, beta: float, cost_terms: List[Tuple]):
@@ -69,12 +92,8 @@ class QAOACircuit:
         try:
             # Cost unitary
             for coeff, pauli_terms in cost_terms:
-                obs = qml.Identity(0)
-                for term in pauli_terms:
-                    wire = int(term[1:])
-                    if term[0] == 'Z':
-                        obs = obs @ qml.PauliZ(wire)
-                qml.ApproxTimeEvolution(obs, gamma * coeff, 1)
+                ham = self._create_pauli_product(pauli_terms)
+                qml.ApproxTimeEvolution(ham, gamma * coeff, 1)
 
             # Mixer unitary
             for i in range(self.n_qubits):
@@ -82,31 +101,6 @@ class QAOACircuit:
         except Exception as e:
             logger.error(f"Error in QAOA layer: {str(e)}")
             raise
-
-    def optimize(self, cost_terms: List[Tuple], steps: int = 100):
-        """
-        Optimize QAOA parameters.
-
-        Args:
-            cost_terms (List[Tuple]): Cost Hamiltonian terms
-            steps (int): Number of optimization steps
-
-        Returns:
-            Tuple[np.ndarray, float]: Optimal parameters and final cost
-        """
-        params = qml.numpy.array(np.random.uniform(0, 2*np.pi, 2*self.depth), requires_grad=True)
-
-        def objective(params):
-            return np.sum(self.circuit(params, cost_terms))
-
-        opt = qml.GradientDescentOptimizer(stepsize=0.1)
-
-        for step in range(steps):
-            params = opt.step(objective, params)
-            if step % 10 == 0:
-                logger.info(f"Step {step}: Cost = {objective(params):.4f}")
-
-        return params, objective(params)
 
     def cost_hamiltonian(self, adjacency_matrix: np.ndarray) -> List[Tuple]:
         """
@@ -138,3 +132,55 @@ class QAOACircuit:
             List[Tuple]: List of (coefficient, Pauli terms) pairs
         """
         return [(1.0, [f"X{i}"]) for i in range(self.n_qubits)]
+
+    def optimize(self, cost_terms: List[Tuple], steps: int = 100):
+        """
+        Optimize QAOA parameters.
+
+        Args:
+            cost_terms (List[Tuple]): Cost Hamiltonian terms
+            steps (int): Number of optimization steps
+
+        Returns:
+            Tuple[np.ndarray, float]: Optimal parameters and final cost
+        """
+        try:
+            # Initialize parameters with gradient support
+            params = qml.numpy.array(np.random.uniform(0, 2*np.pi, 2*self.depth), requires_grad=True)
+
+            def objective(params):
+                measurements = self.circuit(params, cost_terms)
+                return measurements  # Average over all qubits
+
+            opt = qml.GradientDescentOptimizer(stepsize=0.1)
+            costs = []
+
+            for step in range(steps):
+                params = opt.step(objective, params)
+                current_cost = float(objective(params))
+                costs.append(current_cost)
+
+                if step % 10 == 0:
+                    logger.info(f"Step {step}: Cost = {current_cost:.4f}")
+
+            final_cost = float(objective(params))
+            logger.info(f"Optimization completed. Final cost: {final_cost:.4f}")
+            return params, costs
+
+        except Exception as e:
+            logger.error(f"Error in optimization: {str(e)}")
+            raise
+
+    def prod(self, operators):
+        """Helper function to multiply quantum operators"""
+        result = operators[0]
+        for op in operators[1:]:
+            result = result @ op
+        return result
+
+def prod(operators):
+    """Helper function to multiply quantum operators"""
+    result = operators[0]
+    for op in operators[1:]:
+        result = result @ op
+    return result

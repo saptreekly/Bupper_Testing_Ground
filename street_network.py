@@ -243,7 +243,7 @@ class StreetNetwork:
             # Decode the polyline to get route coordinates
             route_coords = polyline.decode(data["routes"][0]["geometry"])
             # OSRM returns coordinates as [lon, lat], convert to [lat, lon] for Folium
-            route_coords = [(lat, lon) for lon, lat in route_coords]
+            route_coords = [(lon, lat) for lon, lat in route_coords]
 
             logger.info(f"Retrieved route with {len(route_coords)} points")
             logger.info(f"First point: {route_coords[0]}, Last point: {route_coords[-1]}")
@@ -356,6 +356,10 @@ class StreetNetwork:
             legend_html += '</div>'
             m.get_root().html.add_child(folium.Element(legend_html))
 
+            # Ensure the save path is in the static directory
+            if not save_path.startswith('static/'):
+                save_path = f'static/{save_path}'
+
             # Save the map
             m.save(save_path)
             logger.info(f"Interactive map saved to {save_path}")
@@ -434,6 +438,10 @@ class StreetNetwork:
             plt.ylabel('Latitude')
             plt.legend()
             plt.grid(True, alpha=0.3)
+
+            # Ensure the save path is in the static directory
+            if not save_path.startswith('static/'):
+                save_path = f'static/{save_path}'
 
             # Save the map
             plt.savefig(save_path, bbox_inches='tight', dpi=300)

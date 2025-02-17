@@ -1,12 +1,15 @@
+import os
 from flask import Flask, render_template, jsonify, request
 import logging
 from example import benchmark_optimization
-import os
 import time
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Ensure static directory exists
+os.makedirs('static/route_maps', exist_ok=True)
 
 @app.route('/')
 def index():
@@ -91,17 +94,21 @@ def optimize():
         if network and nodes and routes:
             # Generate both HTML and PNG maps
             node_routes = [[nodes[i] for i in route] for route in routes]
-            map_path = f"static/route_maps/route_{backend}_{'hybrid' if hybrid else 'pure'}.html"
-            png_path = f"static/route_maps/route_{backend}_{'hybrid' if hybrid else 'pure'}.png"
+            map_path = f"route_maps/route_{backend}_{'hybrid' if hybrid else 'pure'}.html"
+            png_path = f"route_maps/route_{backend}_{'hybrid' if hybrid else 'pure'}.png"
 
-            os.makedirs(os.path.dirname(map_path), exist_ok=True)
-            network.create_folium_map(node_routes, save_path=map_path)
-            network.create_static_map(node_routes, save_path=png_path)
+            # Save maps in static directory
+            full_map_path = os.path.join('static', map_path)
+            full_png_path = os.path.join('static', png_path)
+
+            os.makedirs(os.path.dirname(full_map_path), exist_ok=True)
+            network.create_folium_map(node_routes, save_path=full_map_path)
+            network.create_static_map(node_routes, save_path=full_png_path)
 
             return jsonify({
                 'success': True,
-                'map_path': map_path,
-                'png_path': png_path,
+                'map_path': '/' + full_map_path,  # Add leading slash for absolute path
+                'png_path': '/' + full_png_path,
                 'metrics': {
                     'total_time': metrics.get('total_time'),
                     'solution_length': metrics.get('solution_length'),

@@ -34,42 +34,46 @@ class QUBOFormulation:
     def create_qubo_matrix(self, distance_matrix: np.ndarray, penalty: float = 1.0) -> np.ndarray:
         """
         Create QUBO matrix for the routing problem.
-        
+
         Args:
             distance_matrix (np.ndarray): Matrix of distances between cities
             penalty (float): Penalty coefficient for constraints
-        
+
         Returns:
             np.ndarray: QUBO matrix
         """
         n = self.n_cities
         size = n * n
         Q = np.zeros((size, size))
-        
-        # Add distance terms
+
+        # Add distance terms (ensure symmetry)
         for i in range(n):
             for j in range(n):
                 for k in range(n-1):
                     idx1 = i * n + k
                     idx2 = j * n + (k + 1)
-                    Q[idx1, idx2] = distance_matrix[i, j]
-        
-        # Add constraint terms (one city per time step)
+                    # Add both (i,j) and (j,i) terms to ensure symmetry
+                    Q[idx1, idx2] += distance_matrix[i, j] / 2
+                    Q[idx2, idx1] += distance_matrix[i, j] / 2
+
+        # Add constraint terms (one city per time step) - symmetric by construction
         for t in range(n):
             for i in range(n):
                 for j in range(i+1, n):
                     idx1 = i * n + t
                     idx2 = j * n + t
                     Q[idx1, idx2] += penalty
-        
-        # Add constraint terms (each city visited once)
+                    Q[idx2, idx1] += penalty
+
+        # Add constraint terms (each city visited once) - symmetric by construction
         for i in range(n):
             for t1 in range(n):
                 for t2 in range(t1+1, n):
                     idx1 = i * n + t1
                     idx2 = i * n + t2
                     Q[idx1, idx2] += penalty
-        
+                    Q[idx2, idx1] += penalty
+
         return Q
     
     def decode_solution(self, binary_solution: List[int]) -> List[int]:

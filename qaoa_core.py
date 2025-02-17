@@ -29,22 +29,20 @@ class QAOACircuit:
             for i in range(self.n_qubits):
                 qml.Hadamard(wires=i)
 
-            # Single QAOA layer
-            gamma, beta = params[0], params[1]
-            logger.debug("QAOA parameters: gamma=%s, beta=%s", str(gamma), str(beta))
+            # QAOA layers
+            for layer in range(self.depth):
+                # Problem unitary
+                gamma = params[2*layer]
+                for coeff, (i, j) in cost_terms:
+                    if i != j:  # Skip self-interactions
+                        qml.CNOT(wires=[i, j])
+                        qml.RZ(2 * gamma * coeff, wires=j)
+                        qml.CNOT(wires=[i, j])
 
-            # Problem unitary (ZZ interactions)
-            logger.debug("Applying problem unitary with %d cost terms", len(cost_terms))
-            for coeff, (i, j) in cost_terms:
-                if i != j:  # Skip self-interactions
-                    qml.CNOT(wires=[i, j])
-                    qml.RZ(2 * gamma * coeff, wires=j)
-                    qml.CNOT(wires=[i, j])
-
-            # Mixer unitary
-            logger.debug("Applying mixer unitary")
-            for i in range(self.n_qubits):
-                qml.RX(2 * beta, wires=i)
+                # Mixer unitary
+                beta = params[2*layer + 1]
+                for i in range(self.n_qubits):
+                    qml.RX(2 * beta, wires=i)
 
             # Measure expectation values
             measurements = [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
@@ -55,97 +53,84 @@ class QAOACircuit:
             logger.error("Error in circuit implementation: %s", str(e))
             raise
 
-    def optimize(self, cost_terms: List[Tuple], steps: int = 20):
-        """Optimize QAOA parameters with debugging."""
+    def optimize(self, cost_terms: List[Tuple], steps: int = 100):
+        """Optimize QAOA parameters."""
         try:
-            # Initialize parameters with better starting point
-            params = qml.numpy.array([qml.numpy.pi/4, qml.numpy.pi/2], requires_grad=True)
+            # Initialize parameters
+            params = np.array([np.pi/4, np.pi/2] * self.depth)
             logger.info("Initial parameters: %s", str(params))
 
-            # Use Adam optimizer with smaller learning rate
+            # Use Adam optimizer with careful learning rate
             opt = qml.AdamOptimizer(stepsize=0.01)
             costs = []
 
             def cost_function(params):
                 try:
-                    # Get measurements and verify dimensions
-                    measurements = self.circuit(params, cost_terms)
-                    measurements = qml.numpy.array(measurements)
-                    assert len(measurements) == self.n_qubits, f"Expected {self.n_qubits} measurements, got {len(measurements)}"
-                    logger.debug("Measurements: %s", str(measurements))
+                    # Get measurements
+                    measurements = np.asarray(self.circuit(params, cost_terms))
+                    logger.debug("Raw measurements: %s", str(measurements))
 
-                    # Calculate cost with normalization
+                    # Calculate cost
                     cost = 0.0
-                    n_terms = 0
                     for coeff, (i, j) in cost_terms:
-                        term_cost = coeff * measurements[i] * measurements[j]
-                        logger.debug("Cost term (%d,%d) with coeff %.3f: %s", 
-                                i, j, coeff, str(term_cost))
-                        cost += term_cost
-                        n_terms += 1
+                        term = float(measurements[i]) * float(measurements[j]) * coeff
+                        cost += term
+                        logger.debug("Cost term (%d,%d): %.6f", i, j, term)
 
-                    # Normalize cost by number of terms
-                    if n_terms > 0:
-                        cost = cost / n_terms
-
-                    logger.debug("Total normalized cost: %s", str(cost))
+                    cost_val = float(np.asarray(cost))
+                    logger.debug("Total cost: %.6f", cost_val)
                     return cost
 
                 except Exception as e:
                     logger.error("Error in cost function: %s", str(e))
                     raise
 
+            # Optimization loop
             prev_cost = float('inf')
+            best_cost = float('inf')
+            best_params = None
+
             for step in range(steps):
                 try:
-                    # One optimization step with parameter update
+                    # Optimization step
                     params, current_cost = opt.step_and_cost(cost_function, params)
 
-                    # Convert cost value for history
-                    if hasattr(current_cost, 'numpy'):
-                        history_cost = float(current_cost.numpy())
-                    else:
-                        history_cost = float(current_cost)
+                    # Convert cost to float safely
+                    cost_val = float(np.asarray(current_cost))
+                    costs.append(cost_val)
 
-                    costs.append(history_cost)
+                    # Track best solution
+                    if cost_val < best_cost:
+                        best_cost = cost_val
+                        best_params = params.copy()
+                        logger.info("New best solution - Step: %d, Cost: %.6f", step, best_cost)
 
-                    # Log progress
-                    logger.info("Iteration %d: Cost = %.6f", step, history_cost)
-
-                    # Check convergence
-                    if abs(prev_cost - history_cost) < 1e-6:
-                        logger.info("Optimization converged within tolerance")
+                    # Convergence check
+                    if abs(prev_cost - cost_val) < 1e-6:
+                        logger.info("Converged at step %d", step)
                         break
 
-                    prev_cost = history_cost
+                    prev_cost = cost_val
+                    logger.info("Step %d: Cost = %.6f", step, cost_val)
 
                 except Exception as e:
                     logger.error("Error in optimization step %d: %s", step, str(e))
                     raise
 
-            return params, costs
+            return best_params if best_params is not None else params, costs
 
         except Exception as e:
             logger.error("Error during optimization: %s", str(e))
             raise
 
-    def compute_expectation(self, optimal_params: np.ndarray, 
-                          cost_terms: List[Tuple]) -> float:
-        """
-        Compute expectation value with optimal parameters.
-        """
+    def compute_expectation(self, optimal_params: np.ndarray, cost_terms: List[Tuple]) -> float:
+        """Compute expectation value with optimal parameters."""
         try:
-            # Get measurements as numpy array
-            measurements = np.array(self.circuit(optimal_params, cost_terms))
-
-            # Calculate final cost using measurements
+            measurements = np.asarray(self.circuit(optimal_params, cost_terms))
             cost = 0.0
             for coeff, (i, j) in cost_terms:
-                cost += coeff * measurements[i] * measurements[j]
-
-            if hasattr(cost, 'numpy'):
-                cost = float(cost.numpy())
-            return float(cost)
+                cost += coeff * float(measurements[i]) * float(measurements[j])
+            return float(np.asarray(cost))
 
         except Exception as e:
             logger.error("Error computing expectation: %s", str(e))

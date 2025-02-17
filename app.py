@@ -83,8 +83,24 @@ def emit_progress(task_id, message, data=None):
 
 def optimization_progress_callback(task_id):
     """Create a callback function for the optimization process"""
-    def callback(stage, data):
-        emit_progress(task_id, stage, data)
+    def callback(step, data):
+        status = f"Step {step}"
+        if isinstance(data, dict):
+            progress = data.get('progress', 0)
+            cost = data.get('cost', 0)
+            best_cost = data.get('best_cost', float('inf'))
+            status += f" - Cost: {cost:.4f} (Best: {best_cost:.4f})"
+        else:
+            progress = step / 100  # Fallback progress calculation
+            cost = float(data)
+            status = f"Step {step} - Cost: {cost:.4f}"
+
+        emit_progress(task_id, status, {
+            'step': step,
+            'cost': cost,
+            'status': f"Optimizing ({(progress * 100):.0f}%)",
+            'progress': progress
+        })
     return callback
 
 @app.route('/')

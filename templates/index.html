@@ -108,96 +108,98 @@
     </div>
 
     <script>
-                let currentRequest = null;
+        let currentRequest = null;
 
-                // Handle page unload/navigation/refresh
-                window.addEventListener('beforeunload', function() {
-                    if (currentRequest) {
-                        currentRequest.abort();
-                        currentRequest = null;
-                    }
+        // Handle page unload/navigation/refresh
+        window.addEventListener('beforeunload', function() {
+            if (currentRequest) {
+                currentRequest.abort();
+                currentRequest = null;
+            }
+        });
+
+        // Handle page visibility change (tab switch, minimize)
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden && currentRequest) {
+                currentRequest.abort();
+                currentRequest = null;
+                document.getElementById('loading-overlay').style.display = 'none';
+            }
+        });
+
+        document.getElementById('optimize-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            // Abort any existing request
+            if (currentRequest) {
+                currentRequest.abort();
+                currentRequest = null;
+            }
+
+            const form = e.target;
+            const loadingOverlay = document.getElementById('loading-overlay');
+            loadingOverlay.style.display = 'flex';
+
+            const formData = {
+                n_cities: parseInt(form.n_cities.value),
+                n_vehicles: parseInt(form.n_vehicles.value),
+                location: form.location.value,
+                backend: form.backend.value,
+                hybrid: form.hybrid.checked
+            };
+
+            try {
+                // Create an AbortController
+                const controller = new AbortController();
+                currentRequest = controller;
+
+                const response = await fetch('/optimize', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData),
+                    signal: controller.signal
                 });
 
-                // Handle page visibility change (tab switch, minimize)
-                document.addEventListener('visibilitychange', function() {
-                    if (document.hidden && currentRequest) {
-                        currentRequest.abort();
-                        currentRequest = null;
-                        document.getElementById('loading-overlay').style.display = 'none';
+                const data = await response.json();
+
+                if (data.success) {
+                    // Update map with cache-busting parameter
+                    const mapFrame = document.getElementById('map-frame');
+                    const cacheBuster = new Date().getTime();
+                    mapFrame.src = `${data.map_path}?_=${cacheBuster}`;
+
+                    // Update metrics
+                    const metricsContainer = document.getElementById('metrics-container');
+                    const metricsContent = document.getElementById('metrics-content');
+                    metricsContainer.style.display = 'block';
+
+                    metricsContent.innerHTML = `
+                        <p><strong>Total Time:</strong> ${data.metrics.total_time.toFixed(2)}s</p>
+                        <p><strong>Solution Length:</strong> ${data.metrics.solution_length.toFixed(2)}m</p>
+                        <p><strong>Gap to Classical:</strong> ${(data.metrics.quantum_classical_gap * 100).toFixed(1)}%</p>
+                        <p><strong>Number of Routes:</strong> ${data.metrics.n_routes}</p>
+                        <p><a href="${data.png_path}" target="_blank" class="btn btn-sm btn-secondary mt-2">Download PNG Version</a></p>
+                    `;
+                } else {
+                    if (response.status === 499) {
+                        console.log('Optimization was cancelled');
+                    } else {
+                        alert('Error: ' + data.error);
                     }
-                });
-
-                document.getElementById('optimize-form').addEventListener('submit', async (e) => {
-                    e.preventDefault();
-
-                    // Abort any existing request
-                    if (currentRequest) {
-                        currentRequest.abort();
-                        currentRequest = null;
-                    }
-
-                    const form = e.target;
-                    const loadingOverlay = document.getElementById('loading-overlay');
-                    loadingOverlay.style.display = 'flex';
-
-                    const formData = {
-                        n_cities: parseInt(form.n_cities.value),
-                        n_vehicles: parseInt(form.n_vehicles.value),
-                        location: form.location.value,
-                        backend: form.backend.value,
-                        hybrid: form.hybrid.checked
-                    };
-
-                    try {
-                        // Create an AbortController
-                        const controller = new AbortController();
-                        currentRequest = controller;
-
-                        const response = await fetch('/optimize', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify(formData),
-                            signal: controller.signal
-                        });
-
-                        const data = await response.json();
-
-                        if (data.success) {
-                            // Update map
-                            document.getElementById('map-frame').src = data.map_path;
-
-                            // Update metrics
-                            const metricsContainer = document.getElementById('metrics-container');
-                            const metricsContent = document.getElementById('metrics-content');
-                            metricsContainer.style.display = 'block';
-
-                            metricsContent.innerHTML = `
-                                <p><strong>Total Time:</strong> ${data.metrics.total_time.toFixed(2)}s</p>
-                                <p><strong>Solution Length:</strong> ${data.metrics.solution_length.toFixed(2)}m</p>
-                                <p><strong>Gap to Classical:</strong> ${(data.metrics.quantum_classical_gap * 100).toFixed(1)}%</p>
-                                <p><strong>Number of Routes:</strong> ${data.metrics.n_routes}</p>
-                                <p><a href="${data.png_path}" target="_blank" class="btn btn-sm btn-secondary mt-2">Download PNG Version</a></p>
-                            `;
-                        } else {
-                            if (response.status === 499) {
-                                console.log('Optimization was cancelled');
-                            } else {
-                                alert('Error: ' + data.error);
-                            }
-                        }
-                    } catch (error) {
-                        if (error.name === 'AbortError') {
-                            console.log('Request was cancelled');
-                        } else {
-                            alert('Error during optimization: ' + error.message);
-                        }
-                    } finally {
-                        loadingOverlay.style.display = 'none';
-                        currentRequest = null;
-                    }
-                });
-            </script>
+                }
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    console.log('Request was cancelled');
+                } else {
+                    alert('Error during optimization: ' + error.message);
+                }
+            } finally {
+                loadingOverlay.style.display = 'none';
+                currentRequest = null;
+            }
+        });
+    </script>
 </body>
 </html>

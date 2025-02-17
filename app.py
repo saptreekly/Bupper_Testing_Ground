@@ -132,8 +132,8 @@ def optimize():
                     return jsonify({
                         'success': True,
                         'metrics': serializable_metrics,
-                        'map_path': f"static/{map_filename}.html",
-                        'png_path': f"static/{map_filename}.png"
+                        'map_path': f"/static/{map_filename}.html",
+                        'png_path': f"/static/{map_filename}.png"
                     })
 
         except Exception as opt_error:

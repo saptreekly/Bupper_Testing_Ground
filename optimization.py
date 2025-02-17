@@ -15,7 +15,7 @@ class QAOAOptimizer:
     def optimize(self, cost_terms: List[Tuple], max_iterations: int = 100,
                 learning_rate: float = 0.05, tolerance: float = 1e-5) -> Tuple[np.ndarray, List[float]]:
         try:
-            # Initialize parameters with gradient support
+            # Initialize parameters
             params = qml.numpy.array(np.random.uniform(0, 2*np.pi, self.n_params), requires_grad=True)
             optimizer = qml.AdamOptimizer(stepsize=learning_rate)
             cost_history = []
@@ -23,19 +23,14 @@ class QAOAOptimizer:
             def cost_function(params):
                 """Cost function that processes quantum measurements"""
                 try:
-                    # Get circuit measurement with batched parameters
-                    measurements = self.circuit_handler(params, cost_terms)
+                    # Get circuit measurements as numpy array
+                    measurements = np.array(self.circuit_handler(params, cost_terms))
 
-                    # Calculate cost from measurements directly
+                    # Calculate cost from measurements
                     cost = 0.0
                     for coeff, (i, j) in cost_terms:
-                        if isinstance(measurements, (list, np.ndarray)):
-                            cost += coeff * measurements[i] * measurements[j]
-                        else:
-                            # Handle single measurement case
-                            cost += coeff * measurements
+                        cost += coeff * measurements[i] * measurements[j]
 
-                    self.logger.debug("Calculated cost: %s", str(cost))
                     return cost
 
                 except Exception as e:
@@ -48,7 +43,7 @@ class QAOAOptimizer:
                     # One optimization step with parameter update
                     params, current_cost = optimizer.step_and_cost(cost_function, params)
 
-                    # Convert cost for history (unwrap from ArrayBox if needed)
+                    # Convert cost value for history
                     if hasattr(current_cost, 'numpy'):
                         history_cost = float(current_cost.numpy())
                     else:
@@ -82,15 +77,13 @@ class QAOAOptimizer:
         Compute expectation value with optimal parameters.
         """
         try:
-            measurements = self.circuit_handler(optimal_params, cost_terms)
+            # Get measurements as numpy array
+            measurements = np.array(self.circuit_handler(optimal_params, cost_terms))
 
             # Calculate final cost using measurements
             cost = 0.0
             for coeff, (i, j) in cost_terms:
-                if isinstance(measurements, (list, np.ndarray)):
-                    cost += coeff * measurements[i] * measurements[j]
-                else:
-                    cost += coeff * measurements
+                cost += coeff * measurements[i] * measurements[j]
 
             if hasattr(cost, 'numpy'):
                 cost = float(cost.numpy())

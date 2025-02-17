@@ -15,6 +15,10 @@ author = "agent"
 task = "workflow.run"
 args = "QAOA Routing Optimizer"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "QAOA Test"
+
 [[workflows.workflow]]
 name = "QAOA Routing Optimizer"
 author = "agent"
@@ -28,6 +32,20 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python example.py"
+
+[[workflows.workflow]]
+name = "QAOA Test"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python test_qaoa.py"
 
 [deployment]
 run = ["sh", "-c", "python example.py"]

@@ -7,135 +7,146 @@ logger = logging.getLogger(__name__)
 
 class QAOACircuit:
     def __init__(self, n_qubits: int, depth: int = 1):
-        """
-        Initialize QAOA circuit for routing optimization.
-        """
+        """Initialize QAOA circuit."""
         self.n_qubits = n_qubits
         self.depth = depth
         try:
-            # Create quantum device with better gradient computation
-            self.dev = qml.device('default.qubit', wires=n_qubits, shots=1000)
+            self.dev = qml.device('default.qubit', wires=n_qubits)
             self.circuit = qml.QNode(self._circuit_implementation, 
                                    self.dev,
                                    interface="autograd",
                                    diff_method="parameter-shift")
-            logger.info("Successfully initialized quantum device with %d qubits", n_qubits)
+            logger.info("Initialized quantum device with %d qubits", n_qubits)
         except Exception as e:
             logger.error("Failed to initialize quantum device: %s", str(e))
             raise
 
     def _circuit_implementation(self, params, cost_terms):
-        """
-        Implementation of the QAOA circuit.
-        """
+        """Simplified QAOA circuit implementation."""
         try:
-            # Initialize in superposition
+            # Initial state
+            logger.debug("Preparing initial state with %d qubits", self.n_qubits)
             for i in range(self.n_qubits):
                 qml.Hadamard(wires=i)
-                logger.debug("Applied Hadamard to qubit %d", i)
 
-            # Apply QAOA layers
-            for layer in range(self.depth):
-                gamma = params[2 * layer]
-                beta = params[2 * layer + 1]
+            # Single QAOA layer
+            gamma, beta = params[0], params[1]
+            logger.debug("QAOA parameters: gamma=%s, beta=%s", str(gamma), str(beta))
 
-                logger.debug("Layer %d: gamma = %s, beta = %s", layer, str(gamma), str(beta))
+            # Problem unitary (ZZ interactions)
+            logger.debug("Applying problem unitary with %d cost terms", len(cost_terms))
+            for coeff, (i, j) in cost_terms:
+                if i != j:  # Skip self-interactions
+                    qml.CNOT(wires=[i, j])
+                    qml.RZ(2 * gamma * coeff, wires=j)
+                    qml.CNOT(wires=[i, j])
 
-                # Cost unitary
-                for coeff, pauli_terms in cost_terms:
-                    ham = self._create_pauli_product(pauli_terms)
-                    qml.ApproxTimeEvolution(ham, gamma * coeff, 1)
-
-                # Mixer unitary
-                for i in range(self.n_qubits):
-                    qml.RX(2 * beta, wires=i)
-
-            # Return measurements for all qubits
-            return [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
-
-        except Exception as e:
-            logger.error("Error in circuit execution: %s", str(e))
-            raise
-
-    def _create_pauli_product(self, pauli_terms):
-        """Helper function to create a product of Pauli operators"""
-        try:
-            ops = []
-            for term in pauli_terms:
-                wire = int(term[1:])
-                if term.startswith('Z'):
-                    ops.append(qml.PauliZ(wire))
-                elif term.startswith('X'):
-                    ops.append(qml.PauliX(wire))
-                elif term.startswith('Y'):
-                    ops.append(qml.PauliY(wire))
-
-            if not ops:
-                return qml.Identity(0)
-
-            # Use tensor product operator directly
-            result = ops[0]
-            for op in ops[1:]:
-                result = result @ op
-            return result
-
-        except Exception as e:
-            logger.error("Error creating Pauli product: %s", str(e))
-            raise
-
-    def cost_hamiltonian(self, adjacency_matrix: np.ndarray) -> List[Tuple]:
-        """
-        Construct cost Hamiltonian terms from adjacency matrix.
-        """
-        terms = []
-        try:
+            # Mixer unitary
+            logger.debug("Applying mixer unitary")
             for i in range(self.n_qubits):
-                for j in range(i + 1, self.n_qubits):
-                    if adjacency_matrix[i, j] != 0:
-                        terms.append((float(adjacency_matrix[i, j]), [f"Z{i}", f"Z{j}"]))
-            logger.info("Created %d cost Hamiltonian terms", len(terms))
-            return terms
+                qml.RX(2 * beta, wires=i)
+
+            # Measure expectation values
+            measurements = [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
+            logger.debug("Circuit measurements shape: %d", len(measurements))
+            return measurements
+
         except Exception as e:
-            logger.error("Error in cost_hamiltonian: %s", str(e))
+            logger.error("Error in circuit implementation: %s", str(e))
             raise
 
-    def mixer_hamiltonian(self) -> List[Tuple]:
-        """
-        Construct mixer Hamiltonian terms.
-        """
-        return [(1.0, [f"X{i}"]) for i in range(self.n_qubits)]
-
-    def optimize(self, cost_terms: List[Tuple], steps: int = 100):
-        """
-        Optimize QAOA parameters.
-        """
+    def optimize(self, cost_terms: List[Tuple], steps: int = 20):
+        """Optimize QAOA parameters with debugging."""
         try:
-            # Initialize parameters with better initial values
-            params = qml.numpy.array([0.01, np.pi/4] * self.depth, requires_grad=True)
+            # Initialize parameters with better starting point
+            params = qml.numpy.array([qml.numpy.pi/4, qml.numpy.pi/2], requires_grad=True)
+            logger.info("Initial parameters: %s", str(params))
 
-            def objective(params):
-                measurements = self.circuit(params, cost_terms)
-                # Calculate cost using individual measurements
-                cost = sum(coeff * measurements[i] * measurements[j]
-                          for coeff, (i, j) in cost_terms)
-                return cost
-
-            # Use smaller learning rate for better convergence
+            # Use Adam optimizer with smaller learning rate
             opt = qml.AdamOptimizer(stepsize=0.01)
             costs = []
 
+            def cost_function(params):
+                try:
+                    # Get measurements and verify dimensions
+                    measurements = self.circuit(params, cost_terms)
+                    measurements = qml.numpy.array(measurements)
+                    assert len(measurements) == self.n_qubits, f"Expected {self.n_qubits} measurements, got {len(measurements)}"
+                    logger.debug("Measurements: %s", str(measurements))
+
+                    # Calculate cost with normalization
+                    cost = 0.0
+                    n_terms = 0
+                    for coeff, (i, j) in cost_terms:
+                        term_cost = coeff * measurements[i] * measurements[j]
+                        logger.debug("Cost term (%d,%d) with coeff %.3f: %s", 
+                                i, j, coeff, str(term_cost))
+                        cost += term_cost
+                        n_terms += 1
+
+                    # Normalize cost by number of terms
+                    if n_terms > 0:
+                        cost = cost / n_terms
+
+                    logger.debug("Total normalized cost: %s", str(cost))
+                    return cost
+
+                except Exception as e:
+                    logger.error("Error in cost function: %s", str(e))
+                    raise
+
+            prev_cost = float('inf')
             for step in range(steps):
-                params, cost = opt.step_and_cost(objective, params)
-                cost_val = float(cost)
-                costs.append(cost_val)
+                try:
+                    # One optimization step with parameter update
+                    params, current_cost = opt.step_and_cost(cost_function, params)
 
-                if step % 5 == 0:  # Log more frequently
-                    logger.info("Step %d: Cost = %s", step, str(cost_val))
+                    # Convert cost value for history
+                    if hasattr(current_cost, 'numpy'):
+                        history_cost = float(current_cost.numpy())
+                    else:
+                        history_cost = float(current_cost)
 
-            final_cost = costs[-1]
-            logger.info("Optimization completed. Final cost: %s", str(final_cost))
+                    costs.append(history_cost)
+
+                    # Log progress
+                    logger.info("Iteration %d: Cost = %.6f", step, history_cost)
+
+                    # Check convergence
+                    if abs(prev_cost - history_cost) < 1e-6:
+                        logger.info("Optimization converged within tolerance")
+                        break
+
+                    prev_cost = history_cost
+
+                except Exception as e:
+                    logger.error("Error in optimization step %d: %s", step, str(e))
+                    raise
+
             return params, costs
 
         except Exception as e:
-            logger.error("Error in optimization: %s", str(e))
+            logger.error("Error during optimization: %s", str(e))
+            raise
+
+    def compute_expectation(self, optimal_params: np.ndarray, 
+                          cost_terms: List[Tuple]) -> float:
+        """
+        Compute expectation value with optimal parameters.
+        """
+        try:
+            # Get measurements as numpy array
+            measurements = np.array(self.circuit(optimal_params, cost_terms))
+
+            # Calculate final cost using measurements
+            cost = 0.0
+            for coeff, (i, j) in cost_terms:
+                cost += coeff * measurements[i] * measurements[j]
+
+            if hasattr(cost, 'numpy'):
+                cost = float(cost.numpy())
+            return float(cost)
+
+        except Exception as e:
+            logger.error("Error computing expectation: %s", str(e))
             raise

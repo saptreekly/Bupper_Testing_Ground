@@ -5,6 +5,8 @@ from circuit_visualization import CircuitVisualizer
 from utils import Utils
 import numpy as np
 import random
+from typing import List, Tuple, Set
+from heapq import heappush, heappop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,64 +15,133 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def generate_grid_cities(n_cities, grid_size=16):
-    """Generate random city coordinates on a grid."""
+    """Generate well-spread city coordinates on a grid."""
     positions = set()
+    min_distance = grid_size // 3  # Minimum distance between cities
+    quadrants = [(0, 0, grid_size//2, grid_size//2),
+                (grid_size//2, 0, grid_size, grid_size//2),
+                (0, grid_size//2, grid_size//2, grid_size),
+                (grid_size//2, grid_size//2, grid_size, grid_size)]
+
+    def manhattan_dist(pos1, pos2):
+        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
+
+    def is_far_enough(new_pos):
+        return all(manhattan_dist(new_pos, pos) >= min_distance for pos in positions)
+
+    # Try to place cities in different quadrants first
+    for i in range(min(n_cities, len(quadrants))):
+        x_min, y_min, x_max, y_max = quadrants[i]
+        attempts = 100  # Maximum attempts per quadrant
+        while attempts > 0:
+            x = np.random.randint(x_min, x_max)
+            y = np.random.randint(y_min, y_max)
+            if is_far_enough((x, y)):
+                positions.add((x, y))
+                break
+            attempts -= 1
+
+    # Fill remaining cities with distance constraints
     while len(positions) < n_cities:
         x = np.random.randint(0, grid_size)
         y = np.random.randint(0, grid_size)
-        positions.add((x, y))
-    return list(positions)
+        if is_far_enough((x, y)):
+            positions.add((x, y))
+
+    # Log distances between cities
+    positions_list = list(positions)
+    logger.info("Generated city coordinates: %s", positions_list)
+    for i in range(len(positions_list)):
+        for j in range(i+1, len(positions_list)):
+            dist = manhattan_dist(positions_list[i], positions_list[j])
+            logger.info("Distance between cities %d and %d: %d units", 
+                       i, j, dist)
+
+    return positions_list
 
 def generate_obstacles(grid_size=16, obstacle_density=0.1):
-    """Generate random obstacles (blocked grid lines)."""
+    """Generate random larger obstacles (2x2 blocks)."""
     obstacles = set()
-    total_possible_lines = (grid_size + 1) * grid_size * 2  # Vertical and horizontal lines
-    n_obstacles = int(total_possible_lines * obstacle_density)
+    total_possible_blocks = (grid_size - 1) * (grid_size - 1)  # Account for 2x2 blocks
+    n_obstacles = int(total_possible_blocks * obstacle_density)
 
     while len(obstacles) < n_obstacles:
-        # Randomly choose horizontal or vertical line
-        is_horizontal = random.random() < 0.5
-        if is_horizontal:
-            x = random.randint(0, grid_size-1)
-            y = random.randint(0, grid_size)
-            obstacles.add(('h', x, y))  # Horizontal line at (x,y) to (x+1,y)
-        else:
-            x = random.randint(0, grid_size)
-            y = random.randint(0, grid_size-1)
-            obstacles.add(('v', x, y))  # Vertical line at (x,y) to (x,y+1)
+        # Generate top-left corner of 2x2 block
+        x = random.randint(0, grid_size-2)
+        y = random.randint(0, grid_size-2)
+
+        # Add all edges of 2x2 block
+        obstacles.add(('h', x, y))      # Top edge
+        obstacles.add(('h', x, y+1))    # Bottom edge
+        obstacles.add(('v', x, y))      # Left edge
+        obstacles.add(('v', x+1, y))    # Right edge
 
     return obstacles
 
 def manhattan_distance_with_obstacles(city1, city2, obstacles, grid_size):
-    """Calculate Manhattan distance between two cities avoiding obstacles."""
-    def is_path_blocked(x1, y1, x2, y2):
-        # Check if the path between two adjacent points is blocked
-        if x1 == x2:  # Vertical movement
-            min_y, max_y = min(y1, y2), max(y1, y2)
-            return ('v', x1, min_y) in obstacles
-        else:  # Horizontal movement
-            min_x, max_x = min(x1, x2), max(x1, x2)
-            return ('h', min_x, y1) in obstacles
+    """Calculate path distance between two cities avoiding obstacles using A* pathfinding."""
+    def get_neighbors(pos):
+        x, y = pos
+        neighbors = []
+        # Only allow vertical and horizontal movements (no diagonals)
+        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:  # Four directions
+            new_x, new_y = x + dx, y + dy
+            if 0 <= new_x <= grid_size and 0 <= new_y <= grid_size:
+                # Check if move crosses any obstacle
+                if dx == 0:  # Vertical movement
+                    if not ('v', min(x, new_x), min(y, new_y)) in obstacles:
+                        neighbors.append((new_x, new_y))
+                else:  # Horizontal movement
+                    if not ('h', min(x, new_x), min(y, new_y)) in obstacles:
+                        neighbors.append((new_x, new_y))
+        return neighbors
 
-    # Simple implementation: if direct Manhattan path is blocked,
-    # use a penalty factor to encourage finding alternative routes
-    x1, y1 = city1
-    x2, y2 = city2
-    direct_distance = abs(x2 - x1) + abs(y2 - y1)
+    def heuristic(pos1, pos2):
+        # Manhattan distance heuristic
+        return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
 
-    # Check for blocked paths in the direct route
-    blocked_count = 0
-    # Check horizontal movement
-    for x in range(min(x1, x2), max(x1, x2)):
-        if is_path_blocked(x, y1, x+1, y1):
-            blocked_count += 1
-    # Check vertical movement
-    for y in range(min(y1, y2), max(y1, y2)):
-        if is_path_blocked(x2, y, x2, y+1):
-            blocked_count += 1
+    def a_star_search(start, goal):
+        frontier = []
+        heappush(frontier, (0, start))
+        came_from = {start: None}
+        cost_so_far = {start: 0}
 
-    # Add penalty for blocked paths
-    return direct_distance + blocked_count * grid_size
+        while frontier:
+            current = heappop(frontier)[1]
+
+            if current == goal:
+                break
+
+            for next_pos in get_neighbors(current):
+                new_cost = cost_so_far[current] + 1
+
+                if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
+                    cost_so_far[next_pos] = new_cost
+                    priority = new_cost + heuristic(next_pos, goal)
+                    heappush(frontier, (priority, next_pos))
+                    came_from[next_pos] = current
+
+        if goal not in came_from:
+            return float('inf'), []
+
+        # Reconstruct path
+        path = []
+        current = goal
+        while current is not None:
+            path.append(current)
+            current = came_from[current]
+        path.reverse()
+
+        return cost_so_far[goal], path
+
+    path_length, path = a_star_search(city1, city2)
+    if path_length == float('inf'):
+        logger.warning(f"No valid path found between cities at {city1} and {city2}")
+        return grid_size * 10, []
+
+    # Log the found path
+    logger.debug(f"Found path from {city1} to {city2}: {path}")
+    return path_length, path
 
 def decode_measurements(measurements, n_cities):
     """
@@ -111,9 +182,9 @@ def decode_measurements(measurements, n_cities):
 def main():
     try:
         # Configuration
-        n_cities = 5  # Increased number of cities
+        n_cities = 3  # Keep at 3 cities
         grid_size = 16
-        qaoa_depth = 2  # Reduced depth for faster convergence
+        qaoa_depth = 2  # Keep depth at 2 for better convergence
 
         logger.info(f"Starting QAOA optimization for {n_cities} cities with depth {qaoa_depth}")
 
@@ -121,27 +192,29 @@ def main():
         coordinates = generate_grid_cities(n_cities, grid_size)
         logger.info("City coordinates on grid: %s", coordinates)
 
-        # Generate obstacles
-        obstacles = generate_obstacles(grid_size, obstacle_density=0.1)
-        logger.info("Generated %d obstacles", len(obstacles))
+        # Generate obstacles with slightly lower density to account for larger obstacles
+        obstacles = generate_obstacles(grid_size, obstacle_density=0.08)
+        logger.info("Generated obstacles: %s", obstacles)
 
         # Create QUBO formulation with Manhattan distance including obstacles
         qubo = QUBOFormulation(n_cities)
         distance_matrix = np.zeros((n_cities, n_cities))
+        paths_between_cities = {}  # Store paths for visualization
+
         for i in range(n_cities):
             for j in range(n_cities):
-                distance_matrix[i,j] = manhattan_distance_with_obstacles(
+                distance, path = manhattan_distance_with_obstacles(
                     coordinates[i], coordinates[j], obstacles, grid_size)
+                distance_matrix[i,j] = distance
+                paths_between_cities[(i,j)] = path
         logger.info("\nDistance matrix:\n%s", distance_matrix)
-
-        # Increased penalty for stronger constraint satisfaction
-        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, penalty=10.0)
 
         # Initialize circuit with more qubits
         n_qubits = n_cities * n_cities
         circuit = QAOACircuit(n_qubits, depth=qaoa_depth)
 
         # Create cost terms from QUBO matrix
+        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, penalty=10.0)
         cost_terms = []
         for i in range(n_qubits):
             for j in range(i, n_qubits):
@@ -152,7 +225,7 @@ def main():
 
         # Run optimization with timeout
         logger.info("Starting QAOA optimization...")
-        params, cost_history = circuit.optimize(cost_terms, steps=150, timeout=180)  # 3 minutes timeout
+        params, cost_history = circuit.optimize(cost_terms, steps=100, timeout=120)  # 2 minutes timeout
         logger.info("Optimization completed")
 
         # Get measurements and decode solution
@@ -164,22 +237,25 @@ def main():
         if Utils.verify_solution(route, n_cities):
             # Calculate total route length considering obstacles
             route_length = 0
+            route_paths = []  # Collect all paths for visualization
             for i in range(n_cities):
-                start = coordinates[route[i]]
-                end = coordinates[route[(i+1)%n_cities]]
-                route_length += manhattan_distance_with_obstacles(
-                    start, end, obstacles, grid_size)
+                start = route[i]
+                end = route[(i+1)%n_cities]
+                path = paths_between_cities[(start, end)]
+                route_paths.append(path)
+                route_length += distance_matrix[start, end]
 
             logger.info("\nValid solution found!")
             logger.info("Route: %s", ' -> '.join(str(x) for x in route))
-            logger.info("Route length: %d", route_length)
+            logger.info("Route length: %d", int(route_length))
 
             # Save visualizations to files
             visualizer = CircuitVisualizer()
             visualizer.plot_route(coordinates, route, grid_size=grid_size, 
-                                   obstacles=obstacles, save_path="route.png")
+                                   obstacles=obstacles, route_paths=route_paths,
+                                   save_path="route.png")
             visualizer.plot_optimization_trajectory(cost_history, 
-                                                    save_path="optimization_trajectory.png")
+                                                     save_path="optimization_trajectory.png")
             logger.info("Visualizations saved as 'route.png' and 'optimization_trajectory.png'")
         else:
             logger.warning("Invalid solution found. Binary solution: %s", binary_solution)

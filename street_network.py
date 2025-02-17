@@ -9,6 +9,7 @@ from shapely.geometry import box
 import random
 import math
 import matplotlib.pyplot as plt
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -231,8 +232,13 @@ class StreetNetwork:
             start_time = time.time()
             logger.info(f"Creating interactive map visualization for {len(routes)} routes")
 
+            # Log graph information
+            logger.info(f"Graph has {len(self.G.nodes)} nodes and {len(self.G.edges)} edges")
+
             # Get center point of the network
             center_point = self.node_positions.unary_union.centroid
+            logger.info(f"Map center point: ({center_point.y}, {center_point.x})")
+
             m = folium.Map(location=[center_point.y, center_point.x], 
                           zoom_start=13,
                           tiles='cartodbpositron')
@@ -255,71 +261,72 @@ class StreetNetwork:
                         path = nx.shortest_path(self.G, start, end, weight='length')
                         path_coords = self.get_node_coordinates(path)
                         logger.info(f"Path from node {start} to {end} has {len(path_coords)} coordinates")
+                        logger.info(f"Path coordinates: {path_coords}")
 
                         # Create a more visible line for the path
-                        folium.PolyLine(
+                        line = folium.PolyLine(
                             locations=path_coords,
                             weight=5,  # Increased line weight
                             color=color,
                             opacity=1.0,  # Increased opacity
                             popup=f'Route {route_idx+1}: {start} → {end}'  # Added route information
-                        ).add_to(m)
+                        )
+                        line.add_to(m)
+                        logger.info(f"Added polyline for path {start} → {end}")
 
                         # Add markers for start and end points with better visibility
                         # Special marker for depot (first node of first route)
                         if route_idx == 0 and i == 0:
-                            folium.Marker(
+                            marker = folium.Marker(
                                 path_coords[0],
                                 popup='Depot',
                                 icon=folium.Icon(color='red', icon='info-sign', prefix='fa')
-                            ).add_to(m)
+                            )
+                            marker.add_to(m)
+                            logger.info(f"Added depot marker at {path_coords[0]}")
                         else:
-                            folium.CircleMarker(
+                            marker = folium.CircleMarker(
                                 path_coords[0],
                                 radius=8,  # Increased marker size
                                 color=color,
                                 fill=True,
                                 fill_opacity=0.7,
                                 popup=f'Stop {i} (Route {route_idx+1})'
-                            ).add_to(m)
+                            )
+                            marker.add_to(m)
+                            logger.info(f"Added stop marker at {path_coords[0]}")
 
-                        folium.CircleMarker(
+                        # Add end point marker
+                        end_marker = folium.CircleMarker(
                             path_coords[-1],
                             radius=8,  # Increased marker size
                             color=color,
                             fill=True,
                             fill_opacity=0.7,
                             popup=f'Stop {i+1} (Route {route_idx+1})'
-                        ).add_to(m)
+                        )
+                        end_marker.add_to(m)
+                        logger.info(f"Added end marker at {path_coords[-1]}")
 
                     except Exception as e:
                         logger.error(f"Could not plot path in route {route_idx} between nodes {start}-{end}: {str(e)}")
+                        logger.error(f"Error details: {traceback.format_exc()}")
                         continue
-
-            # Add a legend with better styling
-            legend_html = '''
-                <div style="position: fixed; 
-                            bottom: 50px; right: 50px; 
-                            border:2px solid grey; z-index:9999; 
-                            background-color:white;
-                            padding: 10px;
-                            font-size:14px;
-                            border-radius: 5px;
-                            box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-                    <p style="margin-bottom:5px;"><strong>Routes:</strong></p>
-            '''
-            for i in range(len(routes)):
-                color = colors[i % len(colors)]
-                legend_html += f'<p style="margin:5px 0;"><i style="background: {color};width:20px;height:3px;display:inline-block;margin-right:5px;vertical-align:middle;"></i> Route {i+1}</p>'
-            legend_html += '</div>'
-            m.get_root().html.add_child(folium.Element(legend_html))
 
             # Save the map
             m.save(save_path)
             logger.info(f"Interactive map saved to {save_path} (time: {time.time() - start_time:.1f}s)")
 
+            # Verify the saved file
+            if os.path.exists(save_path):
+                file_size = os.path.getsize(save_path)
+                logger.info(f"Map file created successfully, size: {file_size} bytes")
+            else:
+                logger.error(f"Failed to create map file at {save_path}")
+
         except Exception as e:
             logger.error(f"Error creating map visualization: {str(e)}")
+            logger.error(f"Error details: {traceback.format_exc()}")
             raise
 
     def create_static_map(self, routes: List[List[int]], save_path: str = "route_map.png"):

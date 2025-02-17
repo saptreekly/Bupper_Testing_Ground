@@ -97,11 +97,7 @@ def optimize():
         backend = data.get('backend', 'qiskit')
         hybrid = data.get('hybrid', False)
 
-        # Cancel flag for the optimization
-        cancel_flag = {'cancelled': False}
-
-        def check_cancelled():
-            return cancel_flag['cancelled']
+        logger.info(f"Starting optimization with {n_cities} cities, {n_vehicles} vehicles in {location}")
 
         try:
             metrics = benchmark_optimization(
@@ -110,15 +106,21 @@ def optimize():
                 place_name=location,
                 backend=backend,
                 hybrid=hybrid,
-                check_cancelled=check_cancelled
+                check_cancelled=None
             )
 
             # Generate map files
             if metrics and 'network' in metrics and 'nodes' in metrics:
                 routes = metrics.get('routes', [])
                 if routes:
+                    logger.info(f"Raw routes received: {routes}")
                     node_routes = [[metrics['nodes'][i] for i in route] for route in routes]
-                    logger.info(f"Generated node routes: {node_routes}")
+                    logger.info(f"Node routes generated: {node_routes}")
+
+                    # Log coordinates for verification
+                    coords = metrics['network'].get_node_coordinates([node for route in node_routes for node in route])
+                    logger.info(f"Route coordinates: {coords}")
+
                     map_filename = f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities"
 
                     # Ensure static directory exists and is writable
@@ -142,6 +144,8 @@ def optimize():
                     # Verify files were created
                     if os.path.exists(map_path) and os.path.exists(png_path):
                         logger.info(f"Map files generated successfully")
+                        logger.info(f"HTML file size: {os.path.getsize(map_path)} bytes")
+                        logger.info(f"PNG file size: {os.path.getsize(png_path)} bytes")
                     else:
                         logger.error(f"Failed to generate map files")
                         return jsonify({

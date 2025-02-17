@@ -6,15 +6,18 @@ from utils import Utils
 import numpy as np
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Update logging configuration
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 def main():
     try:
-        # Problem parameters
-        n_cities = 4
-        qaoa_depth = 2
+        # Problem parameters - reduced size for better convergence
+        n_cities = 3  # Reduced from 4 for faster optimization
+        qaoa_depth = 1  # Reduced from 2 for simpler circuit
 
         logger.info("Generating random cities...")
         coordinates = Utils.generate_random_cities(n_cities)
@@ -24,8 +27,8 @@ def main():
         distance_matrix = qubo.create_distance_matrix(coordinates)
         qubo_matrix = qubo.create_qubo_matrix(distance_matrix)
 
-        # Initialize QAOA circuit
-        n_qubits = n_cities * n_cities  # Binary variable for each city-position combination
+        # Initialize QAOA circuit with reduced parameters
+        n_qubits = n_cities * n_cities
         logger.info(f"Initializing QAOA circuit with {n_qubits} qubits and depth {qaoa_depth}")
         circuit = QAOACircuit(n_qubits, depth=qaoa_depth)
 
@@ -33,24 +36,24 @@ def main():
         cost_terms = []
         for i in range(n_qubits):
             for j in range(i, n_qubits):
-                if abs(qubo_matrix[i, j]) > 1e-10:  # Add numerical threshold
+                if abs(qubo_matrix[i, j]) > 1e-10:  # Numerical threshold
                     cost_terms.append((float(qubo_matrix[i, j]), [f"Z{i}", f"Z{j}"]))
 
         logger.info(f"Created {len(cost_terms)} cost Hamiltonian terms")
 
-        # Initialize optimizer and visualizer
+        # Initialize optimizer with reduced iterations
         logger.info("Initializing optimizer and visualizer...")
         optimizer = QAOAOptimizer(circuit.circuit, 2 * qaoa_depth)
         visualizer = CircuitVisualizer()
 
-        # Optimize circuit parameters
+        # Optimize circuit parameters with fewer iterations
         logger.info("Starting optimization process...")
         try:
             optimal_params, cost_history = optimizer.optimize(
                 cost_terms,
-                max_iterations=50,
-                learning_rate=0.05,
-                tolerance=1e-4
+                max_iterations=20,  # Reduced from 50
+                learning_rate=0.01,  # Reduced from 0.05
+                tolerance=1e-3  # Increased from 1e-4
             )
             logger.info("Optimization completed successfully")
         except Exception as e:

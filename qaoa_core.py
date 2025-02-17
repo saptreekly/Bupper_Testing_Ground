@@ -1,8 +1,6 @@
 import pennylane as qml
 import numpy as np
 from typing import List, Tuple
-import qiskit
-from pennylane import qnode
 import logging
 
 logger = logging.getLogger(__name__)
@@ -11,18 +9,16 @@ class QAOACircuit:
     def __init__(self, n_qubits: int, depth: int = 1):
         """
         Initialize QAOA circuit for routing optimization.
-
-        Args:
-            n_qubits (int): Number of qubits needed for problem encoding
-            depth (int): Number of QAOA layers (p-value)
         """
         self.n_qubits = n_qubits
         self.depth = depth
         try:
-            # Create the quantum device
-            self.dev = qml.device('default.qubit', wires=n_qubits, shots=1000)
-            # Define the circuit as a QNode
-            self.circuit = qnode(self.dev)(self._circuit_implementation)
+            # Create quantum device with better gradient computation
+            self.dev = qml.device('default.qubit', wires=n_qubits)
+            self.circuit = qml.QNode(self._circuit_implementation, 
+                                   self.dev,
+                                   interface="autograd",
+                                   diff_method="parameter-shift")
             logger.info(f"Successfully initialized quantum device with {n_qubits} qubits")
         except Exception as e:
             logger.error(f"Failed to initialize quantum device: {str(e)}")
@@ -31,13 +27,6 @@ class QAOACircuit:
     def _circuit_implementation(self, params, cost_terms):
         """
         Implementation of the QAOA circuit.
-
-        Args:
-            params (np.ndarray): Circuit parameters [gamma1, beta1, gamma2, beta2, ...]
-            cost_terms (List[Tuple]): Cost Hamiltonian terms
-
-        Returns:
-            List[float]: Cost expectation value
         """
         try:
             # Initialize in superposition
@@ -48,19 +37,21 @@ class QAOACircuit:
             for layer in range(self.depth):
                 gamma = params[2 * layer]
                 beta = params[2 * layer + 1]
-                self._qaoa_layer(gamma, beta, cost_terms)
+
+                # Cost unitary
+                for coeff, pauli_terms in cost_terms:
+                    ham = self._create_pauli_product(pauli_terms)
+                    qml.ApproxTimeEvolution(ham, gamma * coeff, 1)
+
+                # Mixer unitary (parallel application)
+                qml.templates.layers.SimplifiedTwoDesign([beta], wires=range(self.n_qubits))
 
             # Create cost Hamiltonian operator
             cost_op = sum(coeff * self._create_pauli_product(pauli_terms)
                          for coeff, pauli_terms in cost_terms)
 
-            # Return expectation value as a measurement observable
-            measurement = qml.expval(cost_op)
-            logger.debug(f"Raw measurement type: {type(measurement)}")
-            logger.debug(f"Raw measurement value: {measurement}")
-
-            # Return as list to maintain PennyLane's measurement format
-            return [measurement]
+            # Return expectation value
+            return qml.expval(cost_op)
 
         except Exception as e:
             logger.error(f"Error in circuit execution: {str(e)}")
@@ -69,48 +60,29 @@ class QAOACircuit:
     def _create_pauli_product(self, pauli_terms):
         """Helper function to create a product of Pauli operators"""
         try:
-            operators = [qml.PauliZ(int(term[1:])) for term in pauli_terms]
-            if not operators:
+            ops = []
+            for term in pauli_terms:
+                wire = int(term[1:])
+                if term.startswith('Z'):
+                    ops.append(qml.PauliZ(wire))
+                elif term.startswith('X'):
+                    ops.append(qml.PauliX(wire))
+                elif term.startswith('Y'):
+                    ops.append(qml.PauliY(wire))
+
+            if not ops:
                 return qml.Identity(0)
-            result = operators[0]
-            for op in operators[1:]:
-                result = result @ op
-            return result
+
+            # Use tensor product for multiple operators
+            return qml.prod(ops) if len(ops) > 1 else ops[0]
+
         except Exception as e:
             logger.error(f"Error creating Pauli product: {str(e)}")
-            raise
-
-    def _qaoa_layer(self, gamma: float, beta: float, cost_terms: List[Tuple]):
-        """
-        Implement single QAOA layer.
-
-        Args:
-            gamma (float): Parameter for cost unitary
-            beta (float): Parameter for mixer unitary
-            cost_terms (List[Tuple]): Cost Hamiltonian terms
-        """
-        try:
-            # Cost unitary
-            for coeff, pauli_terms in cost_terms:
-                ham = self._create_pauli_product(pauli_terms)
-                qml.ApproxTimeEvolution(ham, gamma * coeff, 1)
-
-            # Mixer unitary
-            for i in range(self.n_qubits):
-                qml.RX(2 * beta, wires=i)
-        except Exception as e:
-            logger.error(f"Error in QAOA layer: {str(e)}")
             raise
 
     def cost_hamiltonian(self, adjacency_matrix: np.ndarray) -> List[Tuple]:
         """
         Construct cost Hamiltonian terms from adjacency matrix.
-
-        Args:
-            adjacency_matrix (np.ndarray): Matrix representing distances between nodes
-
-        Returns:
-            List[Tuple]: List of (coefficient, Pauli terms) pairs
         """
         terms = []
         try:
@@ -124,25 +96,34 @@ class QAOACircuit:
             logger.error(f"Error in cost_hamiltonian: {str(e)}")
             raise
 
+    def _qaoa_layer(self, gamma: float, beta: float, cost_terms: List[Tuple]):
+        """
+        Implement single QAOA layer.
+        """
+        try:
+            # Cost unitary
+            for coeff, pauli_terms in cost_terms:
+                ham = self._create_pauli_product(pauli_terms)
+                qml.ApproxTimeEvolution(ham, gamma * coeff, 1)
+                logger.debug(f"Applied cost unitary with gamma={str(gamma)}, coeff={coeff}")
+
+            # Mixer unitary
+            for i in range(self.n_qubits):
+                qml.RX(2 * beta, wires=i)
+            logger.debug(f"Applied mixer unitary with beta={str(beta)}")
+        except Exception as e:
+            logger.error(f"Error in QAOA layer: {str(e)}")
+            raise
+
     def mixer_hamiltonian(self) -> List[Tuple]:
         """
         Construct mixer Hamiltonian terms.
-
-        Returns:
-            List[Tuple]: List of (coefficient, Pauli terms) pairs
         """
         return [(1.0, [f"X{i}"]) for i in range(self.n_qubits)]
 
     def optimize(self, cost_terms: List[Tuple], steps: int = 100):
         """
         Optimize QAOA parameters.
-
-        Args:
-            cost_terms (List[Tuple]): Cost Hamiltonian terms
-            steps (int): Number of optimization steps
-
-        Returns:
-            Tuple[np.ndarray, float]: Optimal parameters and final cost
         """
         try:
             # Initialize parameters with gradient support
@@ -152,18 +133,17 @@ class QAOACircuit:
                 measurements = self.circuit(params, cost_terms)
                 return measurements  # Average over all qubits
 
-            opt = qml.GradientDescentOptimizer(stepsize=0.1)
+            opt = qml.AdamOptimizer(stepsize=0.05) #AdamOptimizer and reduced learning rate
             costs = []
 
             for step in range(steps):
-                params = opt.step(objective, params)
-                current_cost = float(objective(params))
-                costs.append(current_cost)
+                params, cost = opt.step_and_cost(objective, params) # step_and_cost
+                costs.append(cost)
 
                 if step % 10 == 0:
-                    logger.info(f"Step {step}: Cost = {current_cost:.4f}")
+                    logger.info(f"Step {step}: Cost = {cost:.4f}")
 
-            final_cost = float(objective(params))
+            final_cost = cost
             logger.info(f"Optimization completed. Final cost: {final_cost:.4f}")
             return params, costs
 

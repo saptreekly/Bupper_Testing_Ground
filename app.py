@@ -1,67 +1,157 @@
 import os
 import sys
-import logging
+import psutil
 import socket
-import time
+import logging
+import traceback
+from flask import Flask, render_template, request, jsonify
+from example import benchmark_optimization
+import threading
 
-# Configure logging to show detailed error messages
 logging.basicConfig(
-    level=logging.DEBUG,  # Set to DEBUG for maximum verbosity
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-try:
-    # Check if Flask is importable
-    logger.info("Attempting to import Flask...")
-    from flask import Flask, render_template, request, jsonify
-    logger.info("Flask import successful")
-
-    # Create basic Flask app
-    logger.info("Initializing Flask application...")
-    app = Flask(__name__)
-
-    @app.route('/')
-    def index():
-        return render_template('index.html')
-
-    if __name__ == '__main__':
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
-            # Get port from environment or use default
-            port = int(os.environ.get('PORT', 50000))
-            logger.info(f"Starting Flask server on port {port}...")
+            s.bind(('0.0.0.0', port))
+            return False
+        except socket.error:
+            return True
 
-            # Test if port is available
-            test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            test_socket.settimeout(1)  # Set timeout for socket operations
-
+def cleanup_port(port):
+    """Attempt to clean up a port that might be in use"""
+    try:
+        for proc in psutil.process_iter():
             try:
-                test_socket.bind(('0.0.0.0', port))
-                test_socket.close()
-                logger.info(f"Port {port} is available")
-            except socket.error as e:
-                logger.error(f"Port {port} is not available: {e}")
-                raise
+                # Get process connections
+                connections = proc.connections()
+                for conn in connections:
+                    if hasattr(conn, 'laddr') and conn.laddr.port == port:
+                        logger.info(f"Found process {proc.pid} using port {port}")
+                        proc.terminate()
+                        logger.info(f"Terminated process {proc.pid}")
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception as e:
+        logger.error(f"Error cleaning up port {port}: {str(e)}")
 
-            # Log system information
-            logger.info(f"Python version: {sys.version}")
-            logger.info(f"Working directory: {os.getcwd()}")
-            logger.info(f"Environment: {os.environ.get('FLASK_ENV', 'not set')}")
+# Create static directory if it doesn't exist
+static_dir = os.path.join(os.path.dirname(__file__), 'static')
+if not os.path.exists(static_dir):
+    os.makedirs(static_dir)
+    logger.info(f"Created static directory at {static_dir}")
 
-            logger.info("Starting Flask application server...")
-            app.run(
-                host='0.0.0.0',
-                port=port,
-                debug=False,
-                use_reloader=False
+app = Flask(__name__, static_folder='static')
+
+# Store active optimization tasks
+active_tasks = {}
+
+@app.route('/')
+def index():
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        logger.error(f"Error rendering index: {str(e)}")
+        return f"Error: {str(e)}", 500
+
+@app.route('/optimize', methods=['POST'])
+def optimize():
+    try:
+        data = request.get_json()
+        n_cities = data.get('n_cities', 4)
+        n_vehicles = data.get('n_vehicles', 1)
+        location = data.get('location', 'San Francisco, California, USA')
+        backend = data.get('backend', 'qiskit')
+        hybrid = data.get('hybrid', False)
+
+        # Cancel flag for the optimization
+        cancel_flag = {'cancelled': False}
+
+        def check_cancelled():
+            return cancel_flag['cancelled']
+
+        try:
+            metrics = benchmark_optimization(
+                n_cities=n_cities,
+                n_vehicles=n_vehicles,
+                place_name=location,
+                backend=backend,
+                hybrid=hybrid,
+                check_cancelled=check_cancelled
             )
 
-        except Exception as e:
-            logger.error(f"Failed to start Flask server: {str(e)}", exc_info=True)
-            import traceback
-            logger.error(f"Full traceback:\n{traceback.format_exc()}")
-            sys.exit(1)
+            # Generate map files
+            if metrics and 'network' in metrics and 'nodes' in metrics:
+                routes = metrics.get('routes', [])
+                if routes:
+                    node_routes = [[metrics['nodes'][i] for i in route] for route in routes]
+                    map_filename = f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities"
 
-except Exception as e:
-    logger.error(f"Critical error during app initialization: {str(e)}", exc_info=True)
-    sys.exit(1)
+                    # Create both HTML and PNG versions
+                    metrics['network'].create_folium_map(
+                        node_routes,
+                        save_path=f"static/{map_filename}.html"
+                    )
+                    metrics['network'].create_static_map(
+                        node_routes,
+                        save_path=f"static/{map_filename}.png"
+                    )
+
+                    return jsonify({
+                        'success': True,
+                        'metrics': metrics,
+                        'map_path': f"static/{map_filename}.html",
+                        'png_path': f"static/{map_filename}.png"
+                    })
+
+        except Exception as opt_error:
+            logger.error(f"Optimization error: {str(opt_error)}")
+            return jsonify({
+                'success': False,
+                'error': str(opt_error)
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error processing optimization request: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+if __name__ == '__main__':
+    try:
+        port = int(os.environ.get('PORT', 3000))
+
+        # Try to clean up the port first
+        if is_port_in_use(port):
+            logger.info(f"Port {port} is in use, attempting to clean up...")
+            cleanup_port(port)
+
+        # Double check if the port is now available
+        if is_port_in_use(port):
+            # If still in use, try alternative ports
+            alternative_ports = [5000, 8080, 4000]
+            for alt_port in alternative_ports:
+                if is_port_in_use(alt_port):
+                    cleanup_port(alt_port)
+                if not is_port_in_use(alt_port):
+                    port = alt_port
+                    break
+            else:
+                raise RuntimeError("Could not find an available port")
+
+        logger.info(f"Starting Flask server on port {port}")
+        app.run(
+            host='0.0.0.0',
+            port=port,
+            debug=False,
+            use_reloader=False  # Disable reloader to avoid duplicate processes
+        )
+    except Exception as e:
+        logger.error("Error starting Flask server:")
+        logger.error(traceback.format_exc())
+        raise

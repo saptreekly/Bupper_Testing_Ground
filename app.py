@@ -36,7 +36,10 @@ def optimize():
 
         def check_cancelled():
             # Check if client disconnected
-            if request.environ.get('werkzeug.server.shutdown') or not request:
+            if request.environ.get('werkzeug.server.shutdown') or \
+               'werkzeug.socket' in request.environ or \
+               not request or \
+               request.is_disconnected:
                 logger.info("Client disconnected, stopping optimization")
                 return True
             # Check timeout
@@ -55,6 +58,12 @@ def optimize():
                 check_cancelled=check_cancelled  # Pass the cancellation check
             )
         except RuntimeError as e:
+            if "cancelled by user" in str(e):
+                logger.info("Optimization cancelled by user")
+                return jsonify({
+                    'success': False,
+                    'error': 'Optimization cancelled'
+                }), 499
             logger.error(f"Runtime error during optimization: {str(e)}")
             return jsonify({
                 'success': False,

@@ -8,6 +8,9 @@ import random
 from typing import List, Tuple, Set
 from heapq import heappush, heappop
 import argparse
+import sys
+import matplotlib
+matplotlib.use('Agg')  # Force non-interactive backend
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,26 +58,12 @@ def generate_grid_cities(n_cities, grid_size=16):
 
     return positions_list
 
-def generate_obstacles(grid_size=16, obstacle_density=0.1):
-    obstacles = set()
-    total_possible_blocks = (grid_size - 1) * (grid_size - 1) // 4
-    n_obstacles = int(total_possible_blocks * obstacle_density)
-
-    while len(obstacles) < n_obstacles * 4:
-        x = random.randint(0, grid_size-2)
-        y = random.randint(0, grid_size-2)
-
-        edges = [
-            ('h', x, y),
-            ('h', x, y+1),
-            ('v', x, y),
-            ('v', x+1, y)
-        ]
-
-        if not any(edge in obstacles for edge in edges):
-            obstacles.update(edges)
-
-    return obstacles
+def generate_random_demands(n_cities: int, min_demand: float = 1.0, 
+                          max_demand: float = 5.0, depot_index: int = 0) -> List[float]:
+    """Generate random demands for each city (depot demand is 0)."""
+    demands = [random.uniform(min_demand, max_demand) for _ in range(n_cities)]
+    demands[depot_index] = 0.0  # Depot has no demand
+    return demands
 
 def manhattan_distance_with_obstacles(city1, city2, obstacles, grid_size):
     logger.info(f"Finding path from {city1} to {city2}")
@@ -155,21 +144,35 @@ def parse_coordinates(coord_str: str) -> List[Tuple[int, int]]:
 
 def main():
     try:
-        parser = argparse.ArgumentParser(description='QAOA Routing Optimizer')
+        parser = argparse.ArgumentParser(description='QAOA Vehicle Routing Optimizer')
         parser.add_argument('--coordinates', type=str, help='City coordinates in format "x1,y1;x2,y2;x3,y3"')
         parser.add_argument('--cities', type=int, default=3, help='Number of cities (default: 3)')
         parser.add_argument('--grid-size', type=int, default=16, help='Grid size (default: 16)')
         parser.add_argument('--qaoa-depth', type=int, default=2, help='QAOA circuit depth (default: 2)')
+        parser.add_argument('--vehicles', type=int, default=1, help='Number of vehicles (default: 1)')
+        parser.add_argument('--capacity', type=float, default=10.0, help='Vehicle capacity (default: 10.0)')
+        parser.add_argument('--non-interactive', action='store_true', help='Run in non-interactive mode')
         args = parser.parse_args()
 
         n_cities = args.cities
         grid_size = args.grid_size
         qaoa_depth = args.qaoa_depth
+        n_vehicles = args.vehicles
+        vehicle_capacity = [args.capacity] * n_vehicles
 
-        logger.info(f"Starting QAOA optimization for {n_cities} cities with depth {qaoa_depth}")
+        # Check if problem size is too large
+        n_qubits = n_cities * n_cities * n_vehicles
+        if n_qubits > 20:
+            logger.error(f"Problem size too large: {n_qubits} qubits required. Please reduce number of cities or vehicles.")
+            logger.error("Maximum supported: 20 qubits")
+            logger.error("Suggestions:")
+            logger.error("- For 1 vehicle: maximum 4 cities")
+            logger.error("- For 2 vehicles: maximum 3 cities")
+            return
 
-        coordinates = None
+        logger.info(f"Starting QAOA optimization for {n_cities} cities with {n_vehicles} vehicles")
 
+        # Handle coordinates input
         if args.coordinates:
             coordinates = parse_coordinates(args.coordinates)
             if not coordinates or len(coordinates) != n_cities:
@@ -180,44 +183,32 @@ def main():
                 return
             logger.info("Using command line coordinates: %s", coordinates)
         else:
-            try:
-                custom_coords = input("Enter city coordinates (format: x1,y1;x2,y2;x3,y3) or press Enter for random: ")
-                if custom_coords.strip():
-                    coordinates = parse_coordinates(custom_coords)
-                    if not coordinates or len(coordinates) != n_cities:
-                        logger.error(f"Invalid number of coordinates. Expected {n_cities}, got {len(coordinates)}")
-                        return
-                    if not validate_coordinates(coordinates, grid_size):
-                        logger.error("Invalid coordinates provided")
-                        return
-                    logger.info("Using custom coordinates: %s", coordinates)
-            except (EOFError, KeyboardInterrupt):
-                logger.info("No input provided or running in non-interactive mode")
-                coordinates = None
-
-        if coordinates is None:
+            # Generate random coordinates in non-interactive mode or when no input is provided
             coordinates = generate_grid_cities(n_cities, grid_size)
             logger.info("Using generated coordinates: %s", coordinates)
 
-        obstacles = generate_obstacles(grid_size, obstacle_density=0.08)
-        logger.info("Generated obstacles: %s", obstacles)
+        # Generate random demands for cities
+        demands = generate_random_demands(n_cities)
+        logger.info("City demands: %s", demands)
 
-        qubo = QUBOFormulation(n_cities)
+        qubo = QUBOFormulation(n_cities, n_vehicles, vehicle_capacity)
         distance_matrix = np.zeros((n_cities, n_cities))
         paths_between_cities = {}
 
         for i in range(n_cities):
             for j in range(n_cities):
-                distance, path = manhattan_distance_with_obstacles(
-                    coordinates[i], coordinates[j], obstacles, grid_size)
-                distance_matrix[i,j] = distance
-                paths_between_cities[(i,j)] = path
+                if i != j:
+                    distance, path = manhattan_distance_with_obstacles(coordinates[i], coordinates[j], set(), grid_size)
+                    distance_matrix[i,j] = distance
+                    paths_between_cities[(i,j)] = path
         logger.info("\nDistance matrix:\n%s", distance_matrix)
 
-        n_qubits = n_cities * n_cities
+        # Initialize circuit with more qubits (n_cities * n_cities * n_vehicles)
+        n_qubits = n_cities * n_cities * n_vehicles
         circuit = QAOACircuit(n_qubits, depth=qaoa_depth)
 
-        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, penalty=10.0)
+        # Create cost terms from QUBO matrix with demands
+        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=10.0)
         cost_terms = []
         for i in range(n_qubits):
             for j in range(i, n_qubits):
@@ -225,7 +216,6 @@ def main():
                     cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
 
         logger.info("Number of cost terms: %d", len(cost_terms))
-
         logger.info("Starting QAOA optimization...")
         params, cost_history = circuit.optimize(cost_terms, steps=100, timeout=120)
         logger.info("Optimization completed")
@@ -233,35 +223,54 @@ def main():
         measurements = circuit.circuit(params, cost_terms)
         binary_solution = decode_measurements(measurements, n_cities)
 
-        route = qubo.decode_solution(binary_solution)
+        routes = qubo.decode_solution(binary_solution)
 
-        if Utils.verify_solution(route, n_cities):
+        total_route_length = 0
+        all_route_paths = []
+
+        for vehicle_idx, route in enumerate(routes):
             route_length = 0
             route_paths = []
-            for i in range(n_cities):
+            route_demand = 0
+
+            for i in range(len(route)-1):
                 start = route[i]
-                end = route[(i+1)%n_cities]
+                end = route[i+1]
                 path = paths_between_cities[(start, end)]
                 route_paths.append(path)
                 route_length += distance_matrix[start, end]
+                if i > 0:  # Don't count depot demand
+                    route_demand += demands[start]
 
-            logger.info("\nValid solution found!")
-            logger.info("Route: %s", ' -> '.join(str(x) for x in route))
-            logger.info("Route length: %d", int(route_length))
+            logger.info(f"\nVehicle {vehicle_idx} route:")
+            logger.info("Path: %s", ' -> '.join(str(x) for x in route))
+            logger.info("Length: %d", int(route_length))
+            logger.info("Total demand: %.2f / %.2f", route_demand, vehicle_capacity[vehicle_idx])
 
-            visualizer = CircuitVisualizer()
-            visualizer.plot_route(coordinates, route, grid_size=grid_size, 
-                                   obstacles=obstacles, route_paths=route_paths,
-                                   save_path="route.png")
+            total_route_length += route_length
+            all_route_paths.extend(route_paths)
+
+        logger.info("\nTotal route length: %d", int(total_route_length))
+
+        # Visualize solution with adjusted parameters
+        visualizer = CircuitVisualizer()
+        try:
+            visualizer.plot_route(coordinates, routes, grid_size=grid_size, 
+                                obstacles=set(), route_paths=all_route_paths,
+                                save_path="route.png")
             visualizer.plot_optimization_trajectory(cost_history, 
-                                                     save_path="optimization_trajectory.png")
+                                                save_path="optimization_trajectory.png")
             logger.info("Visualizations saved as 'route.png' and 'optimization_trajectory.png'")
-        else:
-            logger.warning("Invalid solution found. Binary solution: %s", binary_solution)
+        except Exception as viz_error:
+            logger.error("Visualization error: %s", str(viz_error))
+            # Continue execution even if visualization fails
+
+        # Clean termination
+        sys.exit(0)
 
     except Exception as e:
         logger.error("Error in main: %s", str(e), exc_info=True)
-        raise
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

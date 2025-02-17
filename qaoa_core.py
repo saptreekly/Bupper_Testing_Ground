@@ -12,8 +12,13 @@ class QAOACircuit:
         self.n_qubits = n_qubits
         self.depth = depth
         try:
-            # Use lightning.qubit for faster simulation
-            self.dev = qml.device('lightning.qubit', wires=n_qubits)
+            # Check if number of qubits is too large
+            if n_qubits > 20:  # 2^20 = 1,048,576 amplitudes
+                logger.warning("Large number of qubits (%d) may cause memory issues", n_qubits)
+                raise ValueError(f"Number of qubits ({n_qubits}) exceeds maximum supported (20)")
+
+            # Use default.qubit for better memory efficiency
+            self.dev = qml.device('default.qubit', wires=n_qubits)
             self.circuit = qml.QNode(self._circuit_implementation, 
                                    self.dev,
                                    interface="autograd")
@@ -120,19 +125,12 @@ class QAOACircuit:
         """Compute expectation value with optimal parameters."""
         try:
             measurements = self.circuit(optimal_params, cost_terms)
-            n_cities = int(np.sqrt(self.n_qubits))
             cost = 0.0
-
-            # Problem cost
             for coeff, (i, j) in cost_terms:
-                cost += 4.0 * coeff * measurements[i] * measurements[j]
+                cost += coeff * measurements[i] * measurements[j]
 
-            # Constraint violations
-            for i in range(n_cities):
-                row_sum = sum(measurements[i*n_cities + j] for j in range(n_cities))
-                col_sum = sum(measurements[i + j*n_cities] for j in range(n_cities))
-                cost += 10.0 * ((row_sum - 1.0)**2 + (col_sum - 1.0)**2)
-
+            if hasattr(cost, 'numpy'):
+                cost = float(cost.numpy())
             return float(cost)
 
         except Exception as e:

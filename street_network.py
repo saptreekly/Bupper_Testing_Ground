@@ -10,7 +10,7 @@ import random
 import math
 import matplotlib.pyplot as plt
 import traceback
-import os  # Added missing import
+import os
 import requests
 import polyline
 
@@ -227,23 +227,31 @@ class StreetNetwork:
             coords_str = f"{start_coord[1]},{start_coord[0]};{end_coord[1]},{end_coord[0]}"
             url = f"{self.osrm_url}/{coords_str}?overview=full&geometries=polyline"
 
+            logger.info(f"Requesting OSRM route for coordinates: {coords_str}")
             response = requests.get(url)
+
             if response.status_code != 200:
+                logger.error(f"OSRM request failed with status {response.status_code}: {response.text}")
                 raise RuntimeError(f"OSRM request failed with status {response.status_code}")
 
             data = response.json()
             if "routes" not in data or not data["routes"]:
+                logger.error(f"No route found in OSRM response: {data}")
                 raise RuntimeError("No route found in OSRM response")
 
             # Decode the polyline to get route coordinates
             route_coords = polyline.decode(data["routes"][0]["geometry"])
-            # Convert coordinates from lon,lat to lat,lon
-            route_coords = [(lat, lon) for lon, lat in route_coords]
+            # OSRM returns coordinates as [lon, lat], convert to [lat, lon] for Folium
+            route_coords = [(lat, lon) for lat, lon in route_coords]
+
+            logger.info(f"Retrieved route with {len(route_coords)} points")
+            logger.info(f"First point: {route_coords[0]}, Last point: {route_coords[-1]}")
 
             return route_coords
 
         except Exception as e:
             logger.error(f"Error getting OSRM route: {str(e)}")
+            logger.error(traceback.format_exc())
             raise
 
     def create_folium_map(self, routes: List[List[int]], save_path: str = "street_map.html"):
@@ -252,22 +260,11 @@ class StreetNetwork:
             start_time = time.time()
             logger.info(f"Creating interactive map visualization for {len(routes)} routes")
 
-            # Validate graph and routes
-            if not self.G or not routes:
-                logger.error("Invalid graph or empty routes")
-                raise ValueError("Cannot create map: invalid graph or empty routes")
-
             # Get center point of the network
-            try:
-                center_point = self.node_positions.unary_union.centroid
-                logger.info(f"Map center point: ({center_point.y}, {center_point.x})")
-            except Exception as e:
-                logger.error(f"Error getting center point: {str(e)}")
-                first_node = list(self.G.nodes())[0]
-                center_point = self.node_positions.loc[first_node, 'geometry']
-                logger.info(f"Using fallback center point from first node")
+            center_point = self.node_positions.unary_union.centroid
+            logger.info(f"Map center point: ({center_point.y}, {center_point.x})")
 
-            # Create the base map
+            # Create the base map with a light theme for better visibility
             m = folium.Map(location=[center_point.y, center_point.x],
                           zoom_start=13,
                           tiles='cartodbpositron')
@@ -284,12 +281,25 @@ class StreetNetwork:
                 for i in range(len(route)-1):
                     try:
                         # Get coordinates for start and end nodes
-                        start_coords = self.get_node_coordinates([route[i]])[0]
-                        end_coords = self.get_node_coordinates([route[i+1]])[0]
+                        start_node = route[i]
+                        end_node = route[i+1]
+
+                        start_coords = self.get_node_coordinates([start_node])[0]
+                        end_coords = self.get_node_coordinates([end_node])[0]
+
+                        logger.info(f"Getting route from {start_coords} to {end_coords}")
 
                         # Get route using OSRM
                         path_coords = self.get_osrm_route(start_coords, end_coords)
-                        logger.info(f"Got OSRM route with {len(path_coords)} points")
+
+                        if not path_coords:
+                            logger.error(f"No path coordinates returned for route segment")
+                            continue
+
+                        # Verify coordinates are valid
+                        if not all(isinstance(coord, tuple) and len(coord) == 2 for coord in path_coords):
+                            logger.error(f"Invalid coordinates in path")
+                            continue
 
                         # Add white outline for contrast
                         outline = folium.PolyLine(
@@ -306,11 +316,11 @@ class StreetNetwork:
                             weight=6,
                             color=color,
                             opacity=1.0,
-                            popup=f'Route {route_idx+1}: Node {route[i]} → {route[i+1]}'
+                            popup=f'Route {route_idx+1}: Node {start_node} → {end_node}'
                         )
                         line.add_to(m)
 
-                        # Add markers
+                        # Add markers for start points
                         if route_idx == 0 and i == 0:
                             # Depot marker
                             folium.Marker(
@@ -355,6 +365,13 @@ class StreetNetwork:
             # Save the map
             m.save(save_path)
             logger.info(f"Interactive map saved to {save_path}")
+
+            # Verify file was created
+            if os.path.exists(save_path):
+                file_size = os.path.getsize(save_path)
+                logger.info(f"Map file created successfully, size: {file_size} bytes")
+            else:
+                logger.error(f"Failed to create map file at {save_path}")
 
         except Exception as e:
             logger.error(f"Error creating map visualization: {str(e)}")

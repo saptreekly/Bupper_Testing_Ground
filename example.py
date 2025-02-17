@@ -158,7 +158,7 @@ from typing import Dict, Any
 import numpy as np
 
 def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
-                         backend: str, hybrid: bool = False) -> Dict[str, Any]:
+                         backend: str, hybrid: bool = False, check_cancelled=None) -> Dict[str, Any]:
     metrics = {}
     start_time = time.time()
 
@@ -167,6 +167,10 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         demands = generate_random_demands(n_cities)
         qubo = QUBOFormulation(n_cities, n_vehicles, [float('inf')] * n_vehicles)
         distance_matrix = network.get_distance_matrix(nodes)
+
+        # Check for cancellation after network setup
+        if check_cancelled and check_cancelled():
+            raise RuntimeError("Optimization cancelled by user")
 
         metrics['problem_setup_time'] = time.time() - start_time
         metrics['problem_size'] = {
@@ -182,6 +186,10 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         metrics['qubo_sparsity'] = np.count_nonzero(qubo_matrix) / (qubo_matrix.size)
         logger.info(f"QUBO formation metrics - Time: {metrics['qubo_formation_time']:.3f}s, Sparsity: {metrics['qubo_sparsity']:.3f}")
 
+        # Check for cancellation after QUBO formation
+        if check_cancelled and check_cancelled():
+            raise RuntimeError("Optimization cancelled by user")
+
         start_time = time.time()
         n_qubits = n_cities * n_cities * n_vehicles
         cost_terms = []
@@ -193,6 +201,10 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
             for j in range(i + 1, n_qubits):
                 if abs(qubo_matrix[i, j]) > threshold:
                     cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
+
+            # Check for cancellation periodically during cost terms generation
+            if i % 100 == 0 and check_cancelled and check_cancelled():
+                raise RuntimeError("Optimization cancelled by user")
 
         metrics['cost_terms_generation_time'] = time.time() - start_time
         metrics['n_cost_terms'] = len(cost_terms)
@@ -212,15 +224,22 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
 
         metrics['circuit_initialization_time'] = time.time() - circuit_start
 
+        # Check for cancellation before optimization
+        if check_cancelled and check_cancelled():
+            raise RuntimeError("Optimization cancelled by user")
+
         optimization_start = time.time()
-        params, costs = circuit.optimize(cost_terms, steps=min(100, n_qubits * 5))
+
+        def optimization_callback(step, cost):
+            if check_cancelled and check_cancelled():
+                raise RuntimeError("Optimization cancelled by user")
+            return True
+
+        params, costs = circuit.optimize(cost_terms, steps=min(100, n_qubits * 5), 
+                                      callback=optimization_callback if check_cancelled else None)
+
         metrics['optimization_time'] = time.time() - optimization_start
         logger.info(f"Optimization completed in {metrics['optimization_time']:.3f}s")
-
-        if len(costs) > 1:
-            metrics['convergence_rate'] = (costs[0] - costs[-1]) / len(costs)
-            metrics['cost_variance'] = np.var(costs)
-            logger.info(f"Convergence rate: {metrics['convergence_rate']:.3f}, Variance: {metrics['cost_variance']:.3f}")
 
         solution_start = time.time()
         measurements = circuit.get_expectation_values(params, cost_terms)

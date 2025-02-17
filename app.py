@@ -34,13 +34,16 @@ def optimize():
 
         logger.info(f"Starting optimization with {n_cities} cities using {backend} backend")
 
-        # Check for client disconnect
-        if request.environ.get('werkzeug.server.shutdown'):
-            logger.info("Client disconnected, stopping optimization")
-            return jsonify({
-                'success': False,
-                'error': 'Optimization cancelled by user'
-            }), 499
+        def check_cancelled():
+            # Check if client disconnected
+            if request.environ.get('werkzeug.server.shutdown') or not request:
+                logger.info("Client disconnected, stopping optimization")
+                return True
+            # Check timeout
+            if time.time() - start_time > timeout:
+                logger.info("Optimization timed out")
+                return True
+            return False
 
         try:
             metrics = benchmark_optimization(
@@ -48,7 +51,8 @@ def optimize():
                 n_vehicles=n_vehicles,
                 place_name=location,
                 backend=backend,
-                hybrid=hybrid
+                hybrid=hybrid,
+                check_cancelled=check_cancelled  # Pass the cancellation check
             )
         except RuntimeError as e:
             logger.error(f"Runtime error during optimization: {str(e)}")

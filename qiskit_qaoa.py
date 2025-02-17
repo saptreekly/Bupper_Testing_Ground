@@ -15,9 +15,20 @@ class QiskitQAOA:
         """Initialize QAOA circuit with Qiskit backend."""
         try:
             self.n_qubits = n_qubits
-            # Adaptive depth based on problem size
-            self.depth = min(depth, max(1, n_qubits // 4))
+            # Adaptive depth calculation based on problem size
+            base_depth = max(1, min(depth, n_qubits // 4))
+
+            # Scale depth based on problem size
+            if n_qubits <= 6:
+                depth_scale = 1.0  # Small problems: use base depth
+            elif n_qubits <= 12:
+                depth_scale = 1.5  # Medium problems: increase depth
+            else:
+                depth_scale = 2.0  # Large problems: maximum depth
+
+            self.depth = max(1, min(int(base_depth * depth_scale), n_qubits))
             logger.info(f"Using adaptive circuit depth: {self.depth} for {n_qubits} qubits")
+            logger.debug(f"Depth scaling: base={base_depth}, scale={depth_scale:.1f}, final={self.depth}")
 
             # Configure backend with noise mitigation
             self.backend = Aer.get_backend('aer_simulator_statevector')

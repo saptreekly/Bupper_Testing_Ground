@@ -14,16 +14,30 @@ class QAOACircuit:
             raise ValueError(f"Number of qubits ({n_qubits}) exceeds maximum allowed ({self.max_qubits})")
 
         self.n_qubits = min(n_qubits, self.max_qubits)
-        # Adaptive depth based on problem size
-        self.depth = min(depth, max(1, self.n_qubits // 4))
+
+        # Adaptive depth calculation based on problem size
+        base_depth = max(1, min(depth, self.n_qubits // 4))
+
+        # Scale depth based on problem size
+        if self.n_qubits <= 6:
+            depth_scale = 1.0  # Small problems: use base depth
+        elif self.n_qubits <= 12:
+            depth_scale = 1.5  # Medium problems: increase depth
+        else:
+            depth_scale = 2.0  # Large problems: maximum depth
+
+        self.depth = max(1, min(int(base_depth * depth_scale), self.n_qubits))
+
         try:
             self.dev = qml.device('default.qubit', wires=self.n_qubits)
             self.circuit = qml.QNode(self._circuit_implementation, 
                                    self.dev,
                                    interface="autograd",
                                    diff_method="backprop")
-            logger.info("Initialized quantum device with %d qubits and depth %d", 
+            logger.info("Initialized quantum device with %d qubits and adaptive depth %d", 
                       self.n_qubits, self.depth)
+            logger.debug("Depth scaling: base=%d, scale=%.1f, final=%d", 
+                        base_depth, depth_scale, self.depth)
         except Exception as e:
             logger.error("Failed to initialize quantum device: %s", str(e))
             raise

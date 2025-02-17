@@ -113,9 +113,40 @@
         #backend-comparison {
             height: 300px;
         }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: none;
+            z-index: 1001; /* Ensure it's on top */
+            justify-content: center;
+            align-items: center;
+        }
+        .spinner-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+        }
+        .spinner-border {
+            width: 5rem;
+            height: 5rem;
+        }
+
     </style>
 </head>
 <body>
+    <div class="loading-overlay" id="loading-overlay" style="display: none;">
+        <div class="spinner-container">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    </div>
+
     <div class="optimization-overlay" id="optimization-overlay">
         <div class="optimization-content">
             <h3>Optimization Progress</h3>
@@ -296,7 +327,6 @@
             const entry = document.createElement('div');
             entry.className = `progress-entry${data?.error ? ' error' : ''}`;
 
-            // Format the progress message
             let messageText = message;
             if (data) {
                 if (data.status) {
@@ -429,8 +459,8 @@
             document.getElementById('optimization-progress').style.width = '0%';
             document.getElementById('optimization-status').innerHTML = 'Initializing optimization...';
 
-            // Show optimization overlay
-            document.getElementById('optimization-overlay').style.display = 'block';
+            // Show loading overlay
+            document.getElementById('loading-overlay').style.display = 'block';
 
             // Reset live optimization chart
             Plotly.update('live-optimization-chart', {
@@ -446,7 +476,7 @@
             };
 
             try {
-                console.log('Submitting optimization request:', formData); // Debug log
+                console.log('Submitting optimization request:', formData);
                 const response = await fetch('/optimize', {
                     method: 'POST',
                     headers: {
@@ -456,18 +486,18 @@
                 });
 
                 const data = await response.json();
-                console.log('Optimization response:', data); // Debug log
+                console.log('Optimization response:', data);
 
                 if (data.success) {
                     if (data.task_id) {
                         currentTaskId = data.task_id;
-                        console.log('Setting up socket listener for task:', currentTaskId); // Debug log
+                        console.log('Setting up socket listener for task:', currentTaskId);
 
                         // Remove any existing listeners for the same event
                         socket.off(`optimization_progress_${currentTaskId}`);
 
                         socket.on(`optimization_progress_${currentTaskId}`, (update) => {
-                            console.log('Received progress update:', update); // Debug log
+                            console.log('Received progress update:', update);
                             addProgressEntry(update.message, update.timestamp, update.data);
                         });
                     }
@@ -475,11 +505,13 @@
                 } else {
                     addProgressEntry('Error: ' + data.error, new Date().toLocaleTimeString(), { error: true });
                     document.getElementById('optimization-overlay').style.display = 'none';
+                    document.getElementById('loading-overlay').style.display = 'none';
                 }
             } catch (error) {
-                console.error('Error during optimization:', error); // Debug log
+                console.error('Error during optimization:', error);
                 addProgressEntry('Error during optimization: ' + error.message, new Date().toLocaleTimeString(), { error: true });
                 document.getElementById('optimization-overlay').style.display = 'none';
+                document.getElementById('loading-overlay').style.display = 'none';
             }
         });
 

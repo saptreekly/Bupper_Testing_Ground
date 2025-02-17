@@ -150,9 +150,9 @@ def main():
     try:
         parser = argparse.ArgumentParser(description='QAOA Vehicle Routing Optimizer')
         parser.add_argument('--coordinates', type=str, help='City coordinates in format "x1,y1;x2,y2;x3,y3"')
-        parser.add_argument('--cities', type=int, default=5, help='Number of cities (default: 5)')
+        parser.add_argument('--cities', type=int, default=4, help='Number of cities (default: 4)')  # Changed to 4 cities
         parser.add_argument('--grid-size', type=int, default=16, help='Grid size (default: 16)')
-        parser.add_argument('--qaoa-depth', type=int, default=1, help='QAOA circuit depth (default: 1)')  # Reduced depth
+        parser.add_argument('--qaoa-depth', type=int, default=1, help='QAOA circuit depth (default: 1)')
         parser.add_argument('--vehicles', type=int, default=1, help='Number of vehicles (default: 1)')
         parser.add_argument('--capacity', type=float, default=10.0, help='Vehicle capacity (default: 10.0)')
         parser.add_argument('--non-interactive', action='store_true', help='Run in non-interactive mode')
@@ -166,7 +166,7 @@ def main():
 
         # Check if problem size is too large
         n_qubits = n_cities * n_cities * n_vehicles
-        if n_qubits > 25:
+        if n_qubits > 16:  # Adjusted for 4 cities (16 qubits)
             logger.error(f"Problem size too large: {n_qubits} qubits required. Please reduce number of cities or vehicles.")
             return
 

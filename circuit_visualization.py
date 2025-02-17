@@ -165,11 +165,11 @@ class CircuitVisualizer:
             logger.error(f"Error plotting circuit results: {str(e)}")
             raise
 
-    def plot_solution_comparison(self, coordinates: List[Tuple[int, int]], 
+    def plot_solution_comparison(self, coordinates: List[Tuple[float, float]], 
                                quantum_route: List[int], classical_route: List[int],
                                quantum_metrics: Dict, classical_metrics: Dict,
                                save_path: str = "solution_comparison.png"):
-        """Plot quantum vs classical solution comparison."""
+        """Plot quantum vs classical solution comparison with geographic coordinates."""
         try:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
 
@@ -200,13 +200,13 @@ class CircuitVisualizer:
             logger.error(f"Error plotting solution comparison: {str(e)}")
             raise
 
-    def _plot_route_on_axis(self, ax, coordinates: List[Tuple[int, int]], 
+    def _plot_route_on_axis(self, ax, coordinates: List[Tuple[float, float]], 
                            routes: List[List[int]]):
-        """Helper function to plot a route on a given axis."""
+        """Helper function to plot a route on a given axis using geographic coordinates."""
         # Plot cities
-        x_coords = [coord[0] for coord in coordinates]
-        y_coords = [coord[1] for coord in coordinates]
-        ax.scatter(x_coords, y_coords, c='blue', s=200, zorder=5)
+        lats = [coord[0] for coord in coordinates]
+        lons = [coord[1] for coord in coordinates]
+        ax.scatter(lons, lats, c='blue', s=200, zorder=5)
 
         # Plot routes
         for route_idx, route in enumerate(routes):
@@ -214,26 +214,26 @@ class CircuitVisualizer:
             for i in range(len(route)-1):
                 start = coordinates[route[i]]
                 end = coordinates[route[i+1]]
-                ax.plot([start[0], end[0]], [start[1], end[1]], 
+                ax.plot([start[1], end[1]], [start[0], end[0]], 
                        color=color, linestyle='-', linewidth=2,
                        label=f'Route {route_idx}' if i == 0 else "")
 
                 # Add direction arrows
-                mid_x = (start[0] + end[0]) / 2
-                mid_y = (start[1] + end[1]) / 2
-                dx = end[0] - start[0]
-                dy = end[1] - start[1]
-                ax.arrow(mid_x - dx*0.1, mid_y - dy*0.1,
-                        dx*0.2, dy*0.2,
-                        head_width=0.3, head_length=0.4,
+                mid_lat = (start[0] + end[0]) / 2
+                mid_lon = (start[1] + end[1]) / 2
+                dlat = end[0] - start[0]
+                dlon = end[1] - start[1]
+                ax.arrow(mid_lon - dlon*0.1, mid_lat - dlat*0.1,
+                        dlon*0.2, dlat*0.2,
+                        head_width=0.001, head_length=0.002,
                         fc=color, ec=color,
                         length_includes_head=True,
                         zorder=6)
 
         # Add city labels
-        for i, (x, y) in enumerate(coordinates):
+        for i, (lat, lon) in enumerate(coordinates):
             label = 'Depot' if i == 0 else f'City {i}'
-            ax.annotate(label, (x, y), 
+            ax.annotate(label, (lon, lat), 
                        xytext=(5, 5), textcoords='offset points',
                        fontsize=10)
 

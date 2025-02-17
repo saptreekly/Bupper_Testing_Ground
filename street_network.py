@@ -7,6 +7,7 @@ import logging
 import time
 from shapely.geometry import box
 import random
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +19,6 @@ class StreetNetwork:
         try:
             logger.info(f"Fetching street network for {place_name}")
             start_time = time.time()
-
-            # Configure basic osmnx settings
-            ox.settings.log_console = True
-            ox.settings.use_cache = True
-            ox.settings.timeout = 180
 
             # Try different methods to fetch the network
             try:
@@ -48,34 +44,43 @@ class StreetNetwork:
                     north, south, east, west = ox.utils_geo.bbox_from_point((center_lat, center_lon), dist=dist)
                     logger.info(f"Using bounding box: N={north}, S={south}, E={east}, W={west}")
 
-                    # Use positional arguments in the correct order
                     self.G = ox.graph_from_bbox(north, south, east, west, network_type='drive')
                     logger.info("Successfully fetched network using bounding box")
                 except Exception as bbox_error:
                     logger.error(f"All fetch attempts failed. Last error: {str(bbox_error)}")
                     raise RuntimeError("Could not fetch street network using any method")
 
-            logger.info(f"Initial network fetched in {time.time() - start_time:.1f}s")
-            logger.info(f"Initial network size: {len(self.G.nodes)} nodes, {len(self.G.edges)} edges")
-
-            # Simplify graph
-            self.G = ox.simplify_graph(self.G)
-            logger.info(f"Simplified network size: {len(self.G.nodes)} nodes, {len(self.G.edges)} edges")
-
-            # Convert to non-directional graph for simpler path finding
+            # Convert to non-directional graph
             self.G = self.G.to_undirected()
+            logger.info("Converted to undirected graph")
 
             # Project the graph to use meters for distance calculations
             self.G = ox.project_graph(self.G)
+            logger.info("Projected graph to use meters for distance calculations")
 
-            # Get node positions
+            # Get node positions and convert to lat/long
             self.node_positions = ox.graph_to_gdfs(self.G, edges=False)
+            # Convert back to lat/long coordinates (EPSG:4326)
+            self.node_positions = self.node_positions.to_crs(epsg=4326)
+            logger.info("Retrieved and converted node positions to lat/long format")
 
             logger.info(f"Network initialization completed in {time.time() - start_time:.1f}s")
 
         except Exception as e:
             logger.error(f"Error initializing street network: {str(e)}")
             raise RuntimeError(f"Failed to initialize street network: {str(e)}")
+
+    def calculate_haversine_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate the great circle distance between two points in meters."""
+        R = 6371000  # Earth's radius in meters
+
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a))
+        return R * c
 
     def get_random_nodes(self, n: int, min_distance: float = 200) -> List[int]:
         """Get n random nodes that are at least min_distance meters apart."""
@@ -89,48 +94,104 @@ class StreetNetwork:
             selected_nodes = [depot_node]
             logger.info(f"Selected depot node: {depot_node}")
 
-            # Get connected component containing depot
-            connected_nodes = list(nx.node_connected_component(self.G, depot_node))
-            logger.info(f"Found {len(connected_nodes)} nodes in connected component")
+            # Get all nodes from the graph
+            all_nodes = list(self.G.nodes())
+            logger.info(f"Found {len(all_nodes)} nodes in graph")
+
+            # Create a set of used nodes for faster lookup
+            used_nodes = {depot_node}
 
             attempts = 0
             max_attempts = 1000
+            min_distance_current = min_distance
+
             while len(selected_nodes) < n and attempts < max_attempts:
-                node = random.choice(connected_nodes)
+                remaining_nodes = [node for node in all_nodes if node not in used_nodes]
+                if not remaining_nodes:
+                    break
+
+                node = random.choice(remaining_nodes)
                 valid = True
 
+                # Check distance to all selected nodes
                 for selected in selected_nodes:
                     try:
-                        distance = nx.shortest_path_length(self.G, node, selected, weight='length')
-                        if distance < min_distance:
-                            valid = False
-                            break
-                    except nx.NetworkXNoPath:
+                        # Try network distance first
+                        try:
+                            path_length = nx.shortest_path_length(
+                                self.G, node, selected, weight='length')
+                            if path_length < min_distance_current:
+                                valid = False
+                                break
+                        except nx.NetworkXNoPath:
+                            # If no path exists, use haversine distance as fallback
+                            node_coord = self.get_node_coordinates([node])[0]
+                            selected_coord = self.get_node_coordinates([selected])[0]
+                            dist = self.calculate_haversine_distance(
+                                node_coord[0], node_coord[1],
+                                selected_coord[0], selected_coord[1]
+                            )
+                            if dist < min_distance_current:
+                                valid = False
+                                break
+                    except Exception as e:
+                        logger.warning(f"Error calculating distance: {str(e)}")
                         valid = False
                         break
 
                 if valid:
                     selected_nodes.append(node)
-                    logger.debug(f"Selected node {len(selected_nodes)}/{n}")
+                    used_nodes.add(node)
+                    logger.info(f"Selected node {len(selected_nodes)}/{n} at distance {min_distance_current:.1f}m")
+                    min_distance_current = min_distance  # Reset distance for next node
 
                 attempts += 1
                 if attempts % 100 == 0:
-                    min_distance *= 0.8
-                    logger.info(f"Reducing minimum distance to {min_distance:.1f}m")
+                    min_distance_current *= 0.8
+                    logger.info(f"Reducing minimum distance to {min_distance_current:.1f}m")
 
             if len(selected_nodes) < n:
-                logger.warning(f"Could only find {len(selected_nodes)} suitable nodes")
-                while len(selected_nodes) < n:
-                    for node in connected_nodes:
-                        if node not in selected_nodes:
-                            selected_nodes.append(node)
-                            break
+                logger.warning(f"Could only find {len(selected_nodes)} nodes at desired distances")
+                # Fill remaining slots with closest available nodes
+                remaining_needed = n - len(selected_nodes)
+                available_nodes = [node for node in all_nodes if node not in used_nodes]
+
+                if available_nodes:
+                    # Sort by distance to center_point
+                    center_coord = (center_point.y, center_point.x)
+                    available_nodes.sort(key=lambda node:
+                        self.calculate_haversine_distance(
+                            self.node_positions.loc[node, 'geometry'].y,
+                            self.node_positions.loc[node, 'geometry'].x,
+                            center_coord[0], center_coord[1]
+                        )
+                    )
+
+                    selected_nodes.extend(available_nodes[:remaining_needed])
+                    logger.info(f"Added {remaining_needed} additional nodes to complete selection")
 
             logger.info(f"Node selection completed in {time.time() - start_time:.1f}s")
             return selected_nodes[:n]
 
         except Exception as e:
             logger.error(f"Error selecting random nodes: {str(e)}")
+            raise
+
+    def get_node_coordinates(self, nodes: List[int]) -> List[Tuple[float, float]]:
+        """Get latitude/longitude coordinates for a list of nodes."""
+        try:
+            coordinates = []
+            for node in nodes:
+                # Get coordinates in lat/long format (already in EPSG:4326)
+                coords = (
+                    self.node_positions.loc[node, 'geometry'].y,  # latitude
+                    self.node_positions.loc[node, 'geometry'].x   # longitude
+                )
+                logger.debug(f"Node {node} coordinates (lat, long): {coords}")
+                coordinates.append(coords)
+            return coordinates
+        except Exception as e:
+            logger.error(f"Error getting node coordinates: {str(e)}")
             raise
 
     def get_distance_matrix(self, nodes: List[int]) -> np.ndarray:
@@ -141,8 +202,6 @@ class StreetNetwork:
 
             n = len(nodes)
             distance_matrix = np.zeros((n, n))
-            paths_calculated = 0
-            total_paths = n * (n-1)
 
             for i in range(n):
                 for j in range(n):
@@ -150,16 +209,14 @@ class StreetNetwork:
                         try:
                             distance_matrix[i,j] = nx.shortest_path_length(
                                 self.G, nodes[i], nodes[j], weight='length')
-                            paths_calculated += 1
                         except nx.NetworkXNoPath:
-                            # Use great circle distance as fallback
-                            coord1 = (self.node_positions.loc[nodes[i], 'geometry'].y,
-                                    self.node_positions.loc[nodes[i], 'geometry'].x)
-                            coord2 = (self.node_positions.loc[nodes[j], 'geometry'].y,
-                                    self.node_positions.loc[nodes[j], 'geometry'].x)
-                            distance_matrix[i,j] = ox.distance.great_circle_vec(coord1[0], coord1[1],
-                                                                             coord2[0], coord2[1])
-                            logger.warning(f"No path between nodes {nodes[i]} and {nodes[j]}, using great circle distance")
+                            # Use haversine distance as fallback
+                            coord1 = self.get_node_coordinates([nodes[i]])[0]
+                            coord2 = self.get_node_coordinates([nodes[j]])[0]
+                            distance_matrix[i,j] = self.calculate_haversine_distance(
+                                coord1[0], coord1[1], coord2[0], coord2[1]
+                            )
+                            logger.warning(f"No path between nodes {nodes[i]} and {nodes[j]}, using haversine distance")
 
             logger.info(f"Distance matrix created in {time.time() - start_time:.1f}s")
             return distance_matrix
@@ -176,8 +233,8 @@ class StreetNetwork:
             # Get center point of the network
             center_point = self.node_positions.unary_union.centroid
             m = folium.Map(location=[center_point.y, center_point.x], 
-                         zoom_start=13,
-                         tiles='cartodbpositron')
+                          zoom_start=13,
+                          tiles='cartodbpositron')
 
             # Create a color for each route
             colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 'darkblue', 'darkgreen']
@@ -194,12 +251,7 @@ class StreetNetwork:
 
                     try:
                         path = nx.shortest_path(self.G, start, end, weight='length')
-                        path_coords = []
-
-                        for node in path:
-                            coords = (self.node_positions.loc[node, 'geometry'].y,
-                                    self.node_positions.loc[node, 'geometry'].x)
-                            path_coords.append(coords)
+                        path_coords = self.get_node_coordinates(path)
 
                         # Create a line for the path
                         folium.PolyLine(

@@ -16,6 +16,7 @@ from classical_solver import solve_tsp_brute_force
 from classical_solver import clarke_wright_savings
 import time
 from hybrid_optimizer import HybridOptimizer
+import osmnx as ox
 
 matplotlib.use('Agg')
 
@@ -71,31 +72,35 @@ def generate_random_demands(n_cities: int, min_demand: float = 1.0,
     demands[depot_index] = 0.0
     return demands
 
-def manhattan_distance_with_obstacles(city1, city2, obstacles, grid_size):
+def manhattan_distance_with_obstacles(city1, city2, obstacles, grid_size, network):
+    """Calculate path distance between two points using lat/long coordinates."""
     logger.info(f"Finding path from {city1} to {city2}")
 
-    path = []
-    current = list(city1)
-    target = list(city2)
+    try:
+        # Calculate direct distance using haversine formula
+        direct_distance = network.calculate_haversine_distance(
+            city1[0], city1[1],  # lat1, lon1
+            city2[0], city2[1]   # lat2, lon2
+        )
 
-    while current[0] != target[0]:
-        if current[0] < target[0]:
-            current[0] += 1
-        else:
-            current[0] -= 1
-        path.append(tuple(current))
+        # Generate intermediate points for visualization
+        num_points = 10
+        path = []
 
-    while current[1] != target[1]:
-        if current[1] < target[1]:
-            current[1] += 1
-        else:
-            current[1] -= 1
-        path.append(tuple(current))
+        # Linear interpolation between points
+        for i in range(num_points + 1):
+            t = i / num_points
+            lat = city1[0] + t * (city2[0] - city1[0])
+            lon = city1[1] + t * (city2[1] - city1[1])
+            path.append((lat, lon))
 
-    path.insert(0, city1)
+        logger.info(f"Generated path with {len(path)} points and total distance {direct_distance:.1f}m")
+        return direct_distance, path
 
-    logger.info(f"Generated path: {path}")
-    return len(path) - 1, path
+    except Exception as e:
+        logger.error(f"Error calculating path distance: {str(e)}")
+        # Return a very large distance in case of error
+        return float('inf'), [city1, city2]
 
 def decode_measurements(measurements, n_cities):
     probabilities = [(1 + m) / 2 for m in measurements]
@@ -254,15 +259,10 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         logger.error(f"Error in benchmark optimization: {str(e)}", exc_info=True)
         raise
 
-def generate_street_network_cities(n_cities: int, place_name: str = "San Francisco, California, USA") -> Tuple[List[Tuple[float, float]], StreetNetwork]:
+def generate_street_network_cities(n_cities: int, place_name: str = "San Francisco, California, USA") -> Tuple[List[Tuple[float, float]], List[int], StreetNetwork]:
     network = StreetNetwork(place_name)
     selected_nodes = network.get_random_nodes(n_cities)
-
-    coordinates = []
-    for node in selected_nodes:
-        coords = (network.node_positions.loc[node, 'geometry'].y,
-                 network.node_positions.loc[node, 'geometry'].x)
-        coordinates.append(coords)
+    coordinates = network.get_node_coordinates(selected_nodes)
 
     return coordinates, selected_nodes, network
 
@@ -315,13 +315,15 @@ def main():
                             else:
                                 logger.info(f"{key}: {value}")
 
-                        if 'network' in metrics and 'nodes' in metrics:
-                            routes = qubo.decode_solution(binary_solution)
-                            node_routes = [[metrics['nodes'][i] for i in route] for route in routes]
-                            metrics['network'].create_folium_map(
-                                node_routes,
-                                save_path=f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities.html"
-                            )
+                        if metrics:
+                            if 'network' in metrics and 'nodes' in metrics:
+                                routes = metrics['routes'] if 'routes' in metrics else []
+                                if routes:
+                                    node_routes = [[metrics['nodes'][i] for i in route] for route in routes]
+                                    metrics['network'].create_folium_map(
+                                        node_routes,
+                                        save_path=f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities.html"
+                                    )
 
             visualizer.plot_benchmark_results(all_metrics, save_path="benchmark_results.png")
             visualizer.plot_time_series_analysis(all_metrics, save_path="time_series_analysis.png")
@@ -400,7 +402,7 @@ def main():
         for i in range(n_cities):
             for j in range(n_cities):
                 if i != j:
-                    distance, path = manhattan_distance_with_obstacles(coordinates[i], coordinates[j], set(), grid_size)
+                    distance, path = manhattan_distance_with_obstacles(coordinates[i], coordinates[j], set(), grid_size, network)
                     distance_matrix[i,j] = distance
                     paths_between_cities[(i,j)] = path
         logger.info("\nDistance matrix:\n%s", distance_matrix)

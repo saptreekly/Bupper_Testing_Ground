@@ -1,5 +1,6 @@
 {pkgs}: {
   deps = [
+    pkgs.geos
     pkgs.spdlog
     pkgs.nlohmann_json
     pkgs.muparserx

@@ -278,19 +278,37 @@ class StreetNetwork:
                                 start_coords,
                                 radius=6,
                                 color=color,
-                                fill=True
+                                fill=True,
+                                popup=f'Stop {i} (Route {route_idx+1})'
                             ).add_to(m)
 
                         folium.CircleMarker(
                             end_coords,
                             radius=6,
                             color=color,
-                            fill=True
+                            fill=True,
+                            popup=f'Stop {i+1} (Route {route_idx+1})'
                         ).add_to(m)
 
                     except Exception as e:
                         logger.warning(f"Could not plot path in route {route_idx}: {str(e)}")
                         continue
+
+            # Add a legend
+            legend_html = '''
+                <div style="position: fixed; 
+                            bottom: 50px; right: 50px; 
+                            border:2px solid grey; z-index:9999; 
+                            background-color:white;
+                            padding: 10px;
+                            font-size:14px;">
+                    <p><strong>Routes:</strong></p>
+            '''
+            for i in range(len(routes)):
+                color = colors[i % len(colors)]
+                legend_html += f'<p><i style="background: {color};width:20px;height:2px;display:inline-block"></i> Route {i+1}</p>'
+            legend_html += '</div>'
+            m.get_root().html.add_child(folium.Element(legend_html))
 
             # Save the map
             m.save(save_path)

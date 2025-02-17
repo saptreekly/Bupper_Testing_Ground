@@ -25,7 +25,7 @@
             <meta name="viewport" content="width=device-width,
                 initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
             <style>
-                #map_f9f09a337d8c4e13d7dcc25ed7db6334 {
+                #map_e8c968103e25c3e27773c6e35a4ccf84 {
                     position: relative;
                     width: 100.0%;
                     height: 100.0%;
@@ -39,14 +39,23 @@
 <body>
     
     
-            <div class="folium-map" id="map_f9f09a337d8c4e13d7dcc25ed7db6334" ></div>
+                <div style="position: fixed; 
+                            bottom: 50px; right: 50px; 
+                            border:2px solid grey; z-index:9999; 
+                            background-color:white;
+                            padding: 10px;
+                            font-size:14px;">
+                    <p><strong>Routes:</strong></p>
+            <p><i style="background: red;width:20px;height:2px;display:inline-block"></i> Route 1</p></div>
+    
+            <div class="folium-map" id="map_e8c968103e25c3e27773c6e35a4ccf84" ></div>
         
 </body>
 <script>
     
     
-            var map_f9f09a337d8c4e13d7dcc25ed7db6334 = L.map(
-                "map_f9f09a337d8c4e13d7dcc25ed7db6334",
+            var map_e8c968103e25c3e27773c6e35a4ccf84 = L.map(
+                "map_e8c968103e25c3e27773c6e35a4ccf84",
                 {
                     center: [37.78789488174806, -122.40620145861192],
                     crs: L.CRS.EPSG3857,
@@ -63,7 +72,7 @@
 
         
     
-            var tile_layer_1f47acca02145b58cf03182f0e9b0667 = L.tileLayer(
+            var tile_layer_599eef913b918289aa9c766b886eee7a = L.tileLayer(
                 "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
                 {
   "minZoom": 0,
@@ -80,7 +89,59 @@
             );
         
     
-            tile_layer_1f47acca02145b58cf03182f0e9b0667.addTo(map_f9f09a337d8c4e13d7dcc25ed7db6334);
+            tile_layer_599eef913b918289aa9c766b886eee7a.addTo(map_e8c968103e25c3e27773c6e35a4ccf84);
         
+    
+            var poly_line_74212c46cf2a8611303f10902b9fd223 = L.polyline(
+                [[37.788084399999995, -122.41007720000002], [37.78715619999999, -122.4098893], [37.787370399999986, -122.4082462], [37.7875665, -122.4066987]],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": false, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "noClip": false, "opacity": 0.8, "smoothFactor": 1.0, "stroke": true, "weight": 4}
+            ).addTo(map_e8c968103e25c3e27773c6e35a4ccf84);
+        
+    
+            var circle_marker_c96caffe824f9de3f8e1ec84103dc8dc = L.circleMarker(
+                [37.788084399999995, -122.41007720000002],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 6, "stroke": true, "weight": 3}
+            ).addTo(map_e8c968103e25c3e27773c6e35a4ccf84);
+        
+    
+        var popup_aff0a43f61d94edf3b88bd169671bede = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_dc9d1b54a6acdfcb0f909847d4a2f8d4 = $(`<div id="html_dc9d1b54a6acdfcb0f909847d4a2f8d4" style="width: 100.0%; height: 100.0%;">Stop 1 (Route 1)</div>`)[0];
+                popup_aff0a43f61d94edf3b88bd169671bede.setContent(html_dc9d1b54a6acdfcb0f909847d4a2f8d4);
+            
+        
+
+        circle_marker_c96caffe824f9de3f8e1ec84103dc8dc.bindPopup(popup_aff0a43f61d94edf3b88bd169671bede)
+        ;
+
+        
+    
+    
+            var circle_marker_179f4bc86fce0d72dd680d7b45a539d3 = L.circleMarker(
+                [37.7875665, -122.4066987],
+                {"bubblingMouseEvents": true, "color": "red", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "red", "fillOpacity": 0.2, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 6, "stroke": true, "weight": 3}
+            ).addTo(map_e8c968103e25c3e27773c6e35a4ccf84);
+        
+    
+        var popup_a25a1e53f8d8ae95530ce2a4362a0599 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_06b25bb47ceb5d8ca6402f7cf94c9058 = $(`<div id="html_06b25bb47ceb5d8ca6402f7cf94c9058" style="width: 100.0%; height: 100.0%;">Stop 2 (Route 1)</div>`)[0];
+                popup_a25a1e53f8d8ae95530ce2a4362a0599.setContent(html_06b25bb47ceb5d8ca6402f7cf94c9058);
+            
+        
+
+        circle_marker_179f4bc86fce0d72dd680d7b45a539d3.bindPopup(popup_a25a1e53f8d8ae95530ce2a4362a0599)
+        ;
+
+        
+    
 </script>
 </html>

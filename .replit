@@ -27,6 +27,10 @@ args = "QAOA Tests"
 task = "workflow.run"
 args = "QAOA Benchmark"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "QAOA Street Network"
+
 [[workflows.workflow]]
 name = "QAOA Routing Optimizer"
 author = "agent"
@@ -82,6 +86,20 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python example.py --benchmark --grid-size 8"
+
+[[workflows.workflow]]
+name = "QAOA Street Network"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python example.py --cities 4 --location 'San Francisco, California, USA' --backend qiskit --hybrid"
 
 [deployment]
 run = ["sh", "-c", "python example.py --backend qiskit --cities 4 --hybrid --qaoa-depth 2"]

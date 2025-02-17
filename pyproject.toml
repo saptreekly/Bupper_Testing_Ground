@@ -16,4 +16,7 @@ dependencies = [
     "qiskit-aer>=0.16.1",
     "qiskit-algorithms>=0.3.1",
     "qiskit-optimization>=0.6.1",
+    "osmnx>=2.0.1",
+    "folium>=0.19.4",
+    "geopandas>=1.0.1",
 ]

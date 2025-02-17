@@ -1,8 +1,9 @@
 import logging
 from qaoa_core import QAOACircuit
-from qiskit_qaoa import QiskitQAOA  # Add Qiskit implementation
+from qiskit_qaoa import QiskitQAOA
 from qubo_formulation import QUBOFormulation
 from circuit_visualization import CircuitVisualizer
+from street_network import StreetNetwork
 from utils import Utils
 import numpy as np
 import random
@@ -16,7 +17,7 @@ from classical_solver import clarke_wright_savings
 import time
 from hybrid_optimizer import HybridOptimizer
 
-matplotlib.use('Agg')  # Force non-interactive backend
+matplotlib.use('Agg')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,9 +67,8 @@ def generate_grid_cities(n_cities, grid_size=16):
 
 def generate_random_demands(n_cities: int, min_demand: float = 1.0, 
                           max_demand: float = 5.0, depot_index: int = 0) -> List[float]:
-    """Generate random demands for each city (depot demand is 0)."""
     demands = [random.uniform(min_demand, max_demand) for _ in range(n_cities)]
-    demands[depot_index] = 0.0  # Depot has no demand
+    demands[depot_index] = 0.0
     return demands
 
 def manhattan_distance_with_obstacles(city1, city2, obstacles, grid_size):
@@ -152,20 +152,17 @@ import time
 from typing import Dict, Any
 import numpy as np
 
-def benchmark_optimization(n_cities: int, n_vehicles: int, grid_size: int,
+def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
                          backend: str, hybrid: bool = False) -> Dict[str, Any]:
-    """Benchmark optimization performance."""
     metrics = {}
     start_time = time.time()
 
     try:
-        # Generate problem instance
-        coordinates = generate_grid_cities(n_cities, grid_size)
+        coordinates, nodes, network = generate_street_network_cities(n_cities, place_name)
         demands = generate_random_demands(n_cities)
         qubo = QUBOFormulation(n_cities, n_vehicles, [float('inf')] * n_vehicles)
-        distance_matrix = qubo.create_distance_matrix(coordinates)
+        distance_matrix = network.get_distance_matrix(nodes)
 
-        # Problem characteristics
         metrics['problem_setup_time'] = time.time() - start_time
         metrics['problem_size'] = {
             'n_cities': n_cities,
@@ -174,20 +171,18 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, grid_size: int,
         }
         logger.info(f"Problem size metrics: {metrics['problem_size']}")
 
-        # Measure QUBO formation
         start_time = time.time()
-        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)  # Increased penalty
+        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)
         metrics['qubo_formation_time'] = time.time() - start_time
         metrics['qubo_sparsity'] = np.count_nonzero(qubo_matrix) / (qubo_matrix.size)
         logger.info(f"QUBO formation metrics - Time: {metrics['qubo_formation_time']:.3f}s, Sparsity: {metrics['qubo_sparsity']:.3f}")
 
-        # Generate cost terms with improved filtering
         start_time = time.time()
         n_qubits = n_cities * n_cities * n_vehicles
         cost_terms = []
         max_coeff = np.max(np.abs(qubo_matrix))
         mean_coeff = np.mean(np.abs(qubo_matrix[np.nonzero(qubo_matrix)]))
-        threshold = mean_coeff * 0.01  # Adaptive threshold
+        threshold = mean_coeff * 0.01
 
         for i in range(n_qubits):
             for j in range(i + 1, n_qubits):
@@ -199,7 +194,6 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, grid_size: int,
         metrics['cost_terms_density'] = len(cost_terms) / (n_qubits * (n_qubits - 1) / 2)
         logger.info(f"Generated {len(cost_terms)} cost terms with density {metrics['cost_terms_density']:.3f}")
 
-        # Initialize and run optimization
         circuit_start = time.time()
         if hybrid:
             circuit = HybridOptimizer(n_qubits, depth=min(2, n_cities//2), backend=backend)
@@ -213,25 +207,21 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, grid_size: int,
 
         metrics['circuit_initialization_time'] = time.time() - circuit_start
 
-        # Optimization phase
         optimization_start = time.time()
         params, costs = circuit.optimize(cost_terms, steps=min(100, n_qubits * 5))
         metrics['optimization_time'] = time.time() - optimization_start
         logger.info(f"Optimization completed in {metrics['optimization_time']:.3f}s")
 
-        # Analyze convergence
         if len(costs) > 1:
             metrics['convergence_rate'] = (costs[0] - costs[-1]) / len(costs)
             metrics['cost_variance'] = np.var(costs)
             logger.info(f"Convergence rate: {metrics['convergence_rate']:.3f}, Variance: {metrics['cost_variance']:.3f}")
 
-        # Solution quality metrics
         solution_start = time.time()
         measurements = circuit.get_expectation_values(params, cost_terms)
         binary_solution = [1 if x > 0 else 0 for x in measurements]
         routes = qubo.decode_solution(binary_solution)
 
-        # Calculate detailed solution metrics
         total_length = 0
         max_route_length = 0
         for route in routes:
@@ -249,7 +239,6 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, grid_size: int,
         metrics['convergence_history'] = costs
         metrics['final_cost'] = costs[-1]
 
-        # Classical comparison
         classical_start = time.time()
         _, classical_length = clarke_wright_savings(distance_matrix, demands, 
                                                 depot_index=0, capacity=float('inf'))
@@ -257,11 +246,25 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, grid_size: int,
         metrics['quantum_classical_gap'] = (total_length - classical_length) / classical_length
 
         logger.info(f"Solution metrics - Length: {total_length:.2f}, Gap to classical: {metrics['quantum_classical_gap']:.1%}")
+        metrics['network'] = network
+        metrics['nodes'] = nodes
         return metrics
 
     except Exception as e:
         logger.error(f"Error in benchmark optimization: {str(e)}", exc_info=True)
         raise
+
+def generate_street_network_cities(n_cities: int, place_name: str = "San Francisco, California, USA") -> Tuple[List[Tuple[float, float]], StreetNetwork]:
+    network = StreetNetwork(place_name)
+    selected_nodes = network.get_random_nodes(n_cities)
+
+    coordinates = []
+    for node in selected_nodes:
+        coords = (network.node_positions.loc[node, 'geometry'].y,
+                 network.node_positions.loc[node, 'geometry'].x)
+        coordinates.append(coords)
+
+    return coordinates, selected_nodes, network
 
 def main():
     try:
@@ -279,11 +282,13 @@ def main():
                           help='Use hybrid quantum-classical optimization')
         parser.add_argument('--benchmark', action='store_true',
                           help='Run benchmarking suite')
+        parser.add_argument('--location', type=str, default="San Francisco, California, USA",
+                          help='Location name for street network (default: San Francisco)')
         args = parser.parse_args()
 
         if args.benchmark:
             logger.info("\nRunning benchmarking suite...")
-            problem_sizes = [(3, 1), (4, 1), (5, 1)]  # (cities, vehicles)
+            problem_sizes = [(3, 1), (4, 1), (5, 1)]
             backends = ['qiskit', 'pennylane']
             all_metrics = []
 
@@ -295,7 +300,7 @@ def main():
                         logger.info(f"\nBenchmarking {n_cities} cities, {n_vehicles} vehicles "
                                   f"with {backend} backend, hybrid={hybrid}")
 
-                        metrics = benchmark_optimization(n_cities, n_vehicles, args.grid_size,
+                        metrics = benchmark_optimization(n_cities, n_vehicles, args.location,
                                                       backend, hybrid)
                         metrics['backend'] = backend
                         metrics['hybrid'] = hybrid
@@ -310,19 +315,19 @@ def main():
                             else:
                                 logger.info(f"{key}: {value}")
 
-                        # Plot individual run metrics
-                        visualizer.plot_performance_metrics(
-                            metrics,
-                            save_path=f"performance_metrics_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities.png"
-                        )
+                        if 'network' in metrics and 'nodes' in metrics:
+                            routes = qubo.decode_solution(binary_solution)
+                            node_routes = [[metrics['nodes'][i] for i in route] for route in routes]
+                            metrics['network'].create_folium_map(
+                                node_routes,
+                                save_path=f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities.html"
+                            )
 
-            # Plot comparative benchmark results
             visualizer.plot_benchmark_results(all_metrics, save_path="benchmark_results.png")
             visualizer.plot_time_series_analysis(all_metrics, save_path="time_series_analysis.png")
             visualizer.plot_cross_validation_metrics(all_metrics, save_path="cross_validation_metrics.png")
             logger.info("\nBenchmark visualizations have been saved.")
 
-            # Print summary statistics
             logger.info("\nSummary Statistics:")
             for backend in sorted(set(m['backend'] for m in all_metrics)):
                 backend_metrics = [m for m in all_metrics if m['backend'] == backend]
@@ -332,7 +337,6 @@ def main():
                 logger.info(f"  Average gap to classical: {avg_gap:.1%}")
                 logger.info(f"  Average optimization time: {avg_time:.2f}s")
 
-                # Compare hybrid vs pure quantum metrics
                 if any(m.get('hybrid', False) for m in backend_metrics):
                     hybrid_metrics = [m for m in backend_metrics if m.get('hybrid', False)]
                     pure_metrics = [m for m in backend_metrics if not m.get('hybrid', False)]
@@ -365,16 +369,14 @@ def main():
         n_vehicles = args.vehicles
         vehicle_capacity = [args.capacity] * n_vehicles
 
-        # Check if problem size is too large
         n_qubits = n_cities * n_cities * n_vehicles
-        if n_qubits > 16:  # Adjusted for 4 cities (16 qubits)
+        if n_qubits > 16:
             logger.error(f"Problem size too large: {n_qubits} qubits required. Please reduce number of cities or vehicles.")
             return
 
         logger.info(f"Starting QAOA optimization for {n_cities} cities with {n_vehicles} vehicles")
         logger.info("Note: Larger problem sizes may require more optimization steps")
 
-        # Handle coordinates input
         if args.coordinates:
             coordinates = parse_coordinates(args.coordinates)
             if not coordinates or len(coordinates) != n_cities:
@@ -385,10 +387,9 @@ def main():
                 return
             logger.info("Using command line coordinates: %s", coordinates)
         else:
-            coordinates = generate_grid_cities(n_cities, grid_size)
+            coordinates, nodes, network = generate_street_network_cities(n_cities, args.location)
             logger.info("Using generated coordinates: %s", coordinates)
 
-        # Generate random demands for cities
         demands = generate_random_demands(n_cities)
         logger.info("City demands: %s", demands)
 
@@ -404,10 +405,8 @@ def main():
                     paths_between_cities[(i,j)] = path
         logger.info("\nDistance matrix:\n%s", distance_matrix)
 
-        # Compare with classical solutions
         logger.info("\nSolving with classical methods...")
 
-        # Time the classical solvers
         start_time = time.time()
         optimal_route, optimal_length = solve_tsp_brute_force(distance_matrix)
         brute_force_time = time.time() - start_time
@@ -417,7 +416,6 @@ def main():
                                                    depot_index=0, capacity=vehicle_capacity[0])
         cw_time = time.time() - start_time
 
-        # Time the quantum solution
         start_time = time.time()
         if args.hybrid:
             circuit = HybridOptimizer(n_qubits, depth=qaoa_depth, backend=args.backend)
@@ -429,19 +427,17 @@ def main():
                 circuit = QAOACircuit(n_qubits, depth=qaoa_depth)
             logger.info(f"Initialized {args.backend} circuit with {n_qubits} qubits")
 
-        # Create QUBO matrix with adjusted parameters
         logger.info("Creating QUBO matrix...")
-        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)  # Increased penalty
+        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)
 
-        # Generate cost terms with adjusted threshold
         cost_terms = []
         max_coeff = np.max(np.abs(qubo_matrix))
-        threshold = max_coeff * 0.001  # Lower threshold to 0.1% of max coefficient
+        threshold = max_coeff * 0.001
         logger.info(f"Max coefficient: {max_coeff:.6f}, Threshold: {threshold:.6f}")
 
         n_terms_added = 0
         for i in range(n_qubits):
-            for j in range(i + 1, n_qubits):  # Only upper triangle
+            for j in range(i + 1, n_qubits):
                 if abs(qubo_matrix[i, j]) > threshold:
                     cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
                     n_terms_added += 1
@@ -454,11 +450,9 @@ def main():
 
         logger.info("Starting QAOA optimization...")
 
-        # Run optimization
         try:
             params, costs = circuit.optimize(cost_terms, steps=10)
             if args.backend == 'qiskit':
-                # For Qiskit, we need to get measurements differently
                 measurements = circuit.get_expectation_values(params, cost_terms)
             else:
                 measurements = circuit.circuit(params, cost_terms)
@@ -471,7 +465,6 @@ def main():
             raise
 
 
-        # Calculate total quantum route length
         total_route_length = 0
         all_route_paths = []
         for vehicle_idx, route in enumerate(routes):
@@ -489,7 +482,6 @@ def main():
             total_route_length += route_length
             all_route_paths.extend(route_paths)
 
-        # Prepare metrics for visualization
         quantum_metrics = {
             "distance": total_route_length,
             "time": quantum_time
@@ -500,39 +492,23 @@ def main():
             "time": cw_time
         }
 
-        # Compare solutions with improved logging
         logger.info("\nSolution comparison:")
         logger.info(f"Quantum solution length: {total_route_length:.2f} (time: {quantum_time:.2f}s)")
         logger.info(f"Clarke-Wright solution length: {cw_length:.2f} (time: {cw_time:.2f}s)")
         logger.info(f"Brute force optimal length: {optimal_length:.2f} (time: {brute_force_time:.2f}s)")
 
-        # Add relative performance metrics
         quantum_gap = (total_route_length - optimal_length) / optimal_length
         classical_gap = (cw_length - optimal_length) / optimal_length
         logger.info(f"Quantum solution gap: {quantum_gap:.1%}")
         logger.info(f"Classical solution gap: {classical_gap:.1%}")
 
-        # Visualization
         visualizer = CircuitVisualizer()
         try:
-            # Original route visualization
-            visualizer.plot_route(coordinates, routes, grid_size=grid_size, 
-                                obstacles=set(), route_paths=all_route_paths,
-                                save_path="quantum_route.png")
-
-            # Optimization trajectory
-            visualizer.plot_optimization_trajectory(costs, 
-                                                save_path="optimization_trajectory.png")
-
-            # Compare quantum vs classical
-            visualizer.plot_solution_comparison(coordinates, 
-                                             routes[0], cw_routes[0],  # Compare first route
-                                             quantum_metrics, classical_metrics,
-                                             save_path="solution_comparison.png")
-
-            logger.info("Visualizations saved as 'quantum_route.png', 'optimization_trajectory.png', "
-                       "and 'solution_comparison.png'")
-
+            node_routes = [[nodes[i] for i in route] for route in routes]
+            network.create_folium_map(node_routes, save_path="quantum_route.html")
+            visualizer.plot_optimization_trajectory(costs, save_path="optimization_trajectory.png")
+            visualizer.plot_solution_comparison(coordinates, routes[0], cw_routes[0], quantum_metrics, classical_metrics, save_path="solution_comparison.png")
+            logger.info("Visualizations saved as 'quantum_route.html', 'optimization_trajectory.png', and 'solution_comparison.png'")
         except Exception as viz_error:
             logger.error("Visualization error: %s", str(viz_error))
 

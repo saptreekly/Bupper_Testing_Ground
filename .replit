@@ -118,7 +118,7 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python app.py"
-waitForPort = 3000
+waitForPort = 5000
 
 [deployment]
 run = ["sh", "-c", "python example.py --backend qiskit --cities 4 --hybrid --qaoa-depth 2"]
@@ -126,3 +126,7 @@ run = ["sh", "-c", "python example.py --backend qiskit --cities 4 --hybrid --qao
 [[ports]]
 localPort = 3000
 externalPort = 80
+
+[[ports]]
+localPort = 5000
+externalPort = 5000

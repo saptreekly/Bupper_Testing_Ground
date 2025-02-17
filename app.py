@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory
 import logging
 from example import benchmark_optimization
 import time
@@ -39,11 +39,8 @@ def optimize():
 
         def check_cancelled():
             # Check if client disconnected
-            if request.environ.get('werkzeug.server.shutdown') or \
-               'werkzeug.socket' in request.environ or \
-               not request or \
-               request.is_disconnected:
-                logger.info("Client disconnected, stopping optimization")
+            if request.environ.get('werkzeug.server.shutdown'):
+                logger.info("Server shutdown requested")
                 return True
             # Check timeout
             if time.time() - start_time > timeout:
@@ -94,21 +91,32 @@ def optimize():
         if network and nodes and routes:
             # Generate both HTML and PNG maps
             node_routes = [[nodes[i] for i in route] for route in routes]
-            map_path = f"route_maps/route_{backend}_{'hybrid' if hybrid else 'pure'}.html"
-            png_path = f"route_maps/route_{backend}_{'hybrid' if hybrid else 'pure'}.png"
+            timestamp = int(time.time())  # Add timestamp to prevent caching
+            map_path = f"route_maps/route_{backend}_{'hybrid' if hybrid else 'pure'}_{timestamp}.html"
+            png_path = f"route_maps/route_{backend}_{'hybrid' if hybrid else 'pure'}_{timestamp}.png"
 
             # Save maps in static directory
             full_map_path = os.path.join('static', map_path)
             full_png_path = os.path.join('static', png_path)
 
+            logger.info(f"Generating maps: HTML={full_map_path}, PNG={full_png_path}")
             os.makedirs(os.path.dirname(full_map_path), exist_ok=True)
-            network.create_folium_map(node_routes, save_path=full_map_path)
-            network.create_static_map(node_routes, save_path=full_png_path)
+
+            try:
+                network.create_folium_map(node_routes, save_path=full_map_path)
+                network.create_static_map(node_routes, save_path=full_png_path)
+                logger.info("Successfully generated maps")
+            except Exception as e:
+                logger.error(f"Error generating maps: {str(e)}")
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to generate route visualization'
+                }), 500
 
             return jsonify({
                 'success': True,
-                'map_path': '/' + full_map_path,  # Add leading slash for absolute path
-                'png_path': '/' + full_png_path,
+                'map_path': '/' + map_path,  # Add leading slash for absolute path
+                'png_path': '/' + png_path,
                 'metrics': {
                     'total_time': metrics.get('total_time'),
                     'solution_length': metrics.get('solution_length'),
@@ -130,4 +138,10 @@ def optimize():
         }), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=3000, debug=True)
+    try:
+        logger.info("Starting Flask server on port 5000...")
+        app.run(host='0.0.0.0', port=5000, debug=True)
+    except OSError as e:
+        if "Address already in use" in str(e):
+            logger.error("Port 5000 is in use by another program. Either identify and stop that program, or start the server with a different port.")
+            raise

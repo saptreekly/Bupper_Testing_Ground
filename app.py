@@ -204,6 +204,7 @@ def optimize():
 
                     return jsonify({
                         'success': True,
+                        'task_id': task_id,  # Include task_id in response
                         'metrics': serializable_metrics,
                         'map_path': f"/static/{map_filename}.html",
                         'png_path': f"/static/{map_filename}.png"

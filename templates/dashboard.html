@@ -208,17 +208,35 @@
         const socket = io();
         let currentTaskId = null;
 
-        // Add progress log entry
-        function addProgressEntry(message, timestamp, isError = false) {
+        // Add progress log entry with enhanced formatting
+        function addProgressEntry(message, timestamp, data = null) {
             const progressLog = document.getElementById('progress-log');
             const entry = document.createElement('div');
-            entry.className = `progress-entry${isError ? ' error' : ''}`;
+            entry.className = `progress-entry${data?.error ? ' error' : ''}`;
+
+            // Format the progress message
+            let messageText = message;
+            if (data) {
+                if (data.status) {
+                    messageText += ` - ${data.status}`;
+                }
+                if (data.cost !== undefined) {
+                    messageText += ` (Cost: ${data.cost.toFixed(4)})`;
+                }
+            }
+
             entry.innerHTML = `
                 <span class="timestamp">[${timestamp}]</span>
-                <span class="message">${message}</span>
+                <span class="message">${messageText}</span>
             `;
             progressLog.appendChild(entry);
             progressLog.scrollTop = progressLog.scrollHeight;
+
+            // Update the status in the loading overlay
+            if (data?.status) {
+                document.getElementById('optimization-status').innerHTML = 
+                    `${data.status}<br><small class="text-muted">${message}</small>`;
+            }
         }
 
         // Initialize Plotly charts with empty data
@@ -291,9 +309,6 @@
             }
         }
 
-        // Initialize charts on page load
-        document.addEventListener('DOMContentLoaded', initializeCharts);
-
         // Handle form submission
         document.getElementById('optimization-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -323,24 +338,33 @@
 
                 const data = await response.json();
                 if (data.success) {
+                    if (data.task_id) {
+                        currentTaskId = data.task_id;
+                        // Listen for task-specific progress updates
+                        socket.on(`optimization_progress_${data.task_id}`, (update) => {
+                            addProgressEntry(update.message, update.timestamp, update.data);
+
+                            // Update optimization progress chart if cost data is available
+                            if (update.data && update.data.cost !== undefined) {
+                                Plotly.extendTraces('metrics-history', {
+                                    y: [[update.data.cost]]
+                                }, [0]);
+                            }
+                        });
+                    }
                     updateDashboard(data);
                 } else {
-                    alert('Error: ' + data.error);
+                    addProgressEntry('Error: ' + data.error, new Date().toLocaleTimeString(), { error: true });
                     document.getElementById('loading-overlay').style.display = 'none';
                 }
             } catch (error) {
-                alert('Error during optimization: ' + error.message);
+                addProgressEntry('Error during optimization: ' + error.message, new Date().toLocaleTimeString(), { error: true });
                 document.getElementById('loading-overlay').style.display = 'none';
             }
         });
 
-        // Listen for optimization progress updates
-        socket.on('optimization_progress', (data) => {
-            addProgressEntry(data.message, data.timestamp, data.error);
-            if (data.data && data.data.status) {
-                document.getElementById('optimization-status').textContent = data.data.status;
-            }
-        });
+        // Initialize charts on page load
+        document.addEventListener('DOMContentLoaded', initializeCharts);
     </script>
 </body>
 </html>

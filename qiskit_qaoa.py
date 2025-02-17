@@ -277,7 +277,7 @@ class QiskitQAOA:
                     cost_history.append(current_cost)
                     param_history.append(params.copy())
 
-                    # Call the callback function if provided
+                    # Call the callback function if provided with detailed status
                     if callback:
                         callback(step, current_cost)
 

@@ -10,29 +10,34 @@ logger = logging.getLogger(__name__)
 class HybridOptimizer:
     """Hybrid quantum-classical optimizer for QAOA with improved performance."""
 
-    def __init__(self, n_qubits: int, depth: int = 1, backend: str = 'qiskit'):
+    def __init__(self, n_qubits: int, depth: int = 1, backend: str = 'qiskit', n_vehicles: int = 1):
         """Initialize hybrid optimizer with specified quantum backend."""
         try:
             self.n_qubits = n_qubits
             self.depth = min(depth, max(1, n_qubits // 4))
             self.backend = backend
+            self.n_vehicles = n_vehicles
+
+            # Adjust qubit count based on number of vehicles
+            total_qubits = n_qubits * (1 + (n_vehicles > 1))
+            logger.info(f"Adjusted qubit count for {n_vehicles} vehicles: {total_qubits}")
 
             # Initialize quantum circuit based on backend choice with error handling
             if backend == 'qiskit':
                 try:
-                    self.quantum_circuit = QiskitQAOA(n_qubits, self.depth)
+                    self.quantum_circuit = QiskitQAOA(total_qubits, self.depth)
                 except Exception as e:
                     logger.error(f"Failed to initialize Qiskit backend: {str(e)}")
                     raise
             else:
                 try:
-                    self.quantum_circuit = QAOACircuit(n_qubits, self.depth)
+                    self.quantum_circuit = QAOACircuit(total_qubits, self.depth)
                 except Exception as e:
                     logger.error(f"Failed to initialize PennyLane backend: {str(e)}")
                     raise
 
             logger.info(f"Initialized hybrid optimizer with {backend} backend")
-            logger.debug(f"Configuration: {n_qubits} qubits, depth {self.depth}")
+            logger.debug(f"Configuration: {total_qubits} qubits, depth {self.depth}")
         except Exception as e:
             logger.error(f"Failed to initialize hybrid optimizer: {str(e)}")
             raise
@@ -51,6 +56,10 @@ class HybridOptimizer:
                         zi = np.cos(params[0]) * np.sin(params[1])
                         zj = np.cos(params[0]) * np.sin(params[1])
                         cost += coeff * zi * zj
+                    # Add vehicle capacity constraints
+                    if self.n_vehicles > 1:
+                        capacity_penalty = self._calculate_capacity_penalty(params)
+                        cost += capacity_penalty
                     return float(cost)
                 except Exception as e:
                     logger.error(f"Error in classical cost function: {str(e)}")
@@ -59,7 +68,7 @@ class HybridOptimizer:
             # Multiple starts with improved parameter ranges
             best_cost = float('inf')
             best_params = None
-            n_starts = 5
+            n_starts = 5 + self.n_vehicles  # Increase starts for multi-vehicle problems
 
             for start in range(n_starts):
                 try:
@@ -69,7 +78,7 @@ class HybridOptimizer:
 
                     result = minimize(classical_cost, initial_guess, 
                                    method='COBYLA',
-                                   options={'maxiter': 25, 'rhobeg': 0.1})
+                                   options={'maxiter': 25 * self.n_vehicles, 'rhobeg': 0.1})
 
                     if result.success and result.fun < best_cost:
                         best_cost = result.fun
@@ -88,6 +97,33 @@ class HybridOptimizer:
         except Exception as e:
             logger.error(f"Error in classical pre-optimization: {str(e)}")
             raise
+
+    def _calculate_capacity_penalty(self, params: np.ndarray) -> float:
+        """Calculate penalty for violating vehicle capacity constraints."""
+        try:
+            penalty = 0.0
+            vehicle_loads = np.zeros(self.n_vehicles)
+
+            # Calculate expected load for each vehicle based on parameters
+            for v in range(self.n_vehicles):
+                vehicle_params = params[v * 2 * self.depth:(v + 1) * 2 * self.depth]
+                load_estimate = np.sum(np.cos(vehicle_params)) / len(vehicle_params)
+                vehicle_loads[v] = load_estimate
+
+            # Penalize uneven load distribution
+            mean_load = np.mean(vehicle_loads)
+            load_variance = np.var(vehicle_loads)
+            penalty += load_variance * 10.0  # Scale factor for variance penalty
+
+            # Add constraint for maximum capacity
+            max_capacity = 1.0  # Normalized capacity
+            capacity_violations = np.maximum(0, vehicle_loads - max_capacity)
+            penalty += np.sum(capacity_violations) * 100.0  # High penalty for capacity violations
+
+            return float(penalty)
+        except Exception as e:
+            logger.error(f"Error calculating capacity penalty: {str(e)}")
+            return 0.0
 
     def optimize(self, cost_terms: List[Tuple], steps: int = 100) -> Tuple[np.ndarray, List[float]]:
         """Run hybrid optimization process with adaptive phase lengths."""
@@ -110,7 +146,7 @@ class HybridOptimizer:
 
             # Phase 2: Quantum optimization with adaptive steps
             remaining_steps = steps
-            quantum_steps = min(remaining_steps, 50)  # Start with shorter quantum phase
+            quantum_steps = min(remaining_steps, 50 // self.n_vehicles)  # Reduce steps for multiple vehicles
             logger.info(f"Starting quantum optimization phase: {quantum_steps} steps")
 
             try:
@@ -123,8 +159,12 @@ class HybridOptimizer:
                     """Quantum cost function for classical refinement."""
                     try:
                         measurements = self.quantum_circuit.get_expectation_values(params, cost_terms)
-                        return sum(coeff * measurements[i] * measurements[j] 
-                                for coeff, (i, j) in cost_terms)
+                        cost = sum(coeff * measurements[i] * measurements[j] 
+                                   for coeff, (i, j) in cost_terms)
+                        if self.n_vehicles > 1:
+                            capacity_penalty = self._calculate_capacity_penalty(params)
+                            cost += capacity_penalty
+                        return cost
                     except Exception as e:
                         logger.error(f"Error in quantum cost function: {str(e)}")
                         return float('inf')

@@ -229,7 +229,7 @@ class StreetNetwork:
         """Create an interactive map visualization of the routes."""
         try:
             start_time = time.time()
-            logger.info("Creating interactive map visualization")
+            logger.info(f"Creating interactive map visualization for {len(routes)} routes")
 
             # Get center point of the network
             center_point = self.node_positions.unary_union.centroid
@@ -251,43 +251,44 @@ class StreetNetwork:
                     end = route[i+1]
 
                     try:
+                        # Get shortest path between nodes
                         path = nx.shortest_path(self.G, start, end, weight='length')
                         path_coords = self.get_node_coordinates(path)
                         logger.info(f"Path from node {start} to {end} has {len(path_coords)} coordinates")
 
-                        # Create a line for the path
+                        # Create a more visible line for the path
                         folium.PolyLine(
                             locations=path_coords,
-                            weight=4,
+                            weight=5,  # Increased line weight
                             color=color,
-                            opacity=0.8
+                            opacity=1.0,  # Increased opacity
+                            popup=f'Route {route_idx+1}: {start} → {end}'  # Added route information
                         ).add_to(m)
 
-                        # Add markers for start and end points
-                        start_coords = path_coords[0]
-                        end_coords = path_coords[-1]
-
+                        # Add markers for start and end points with better visibility
                         # Special marker for depot (first node of first route)
                         if route_idx == 0 and i == 0:
                             folium.Marker(
-                                start_coords,
+                                path_coords[0],
                                 popup='Depot',
-                                icon=folium.Icon(color='red', icon='info-sign')
+                                icon=folium.Icon(color='red', icon='info-sign', prefix='fa')
                             ).add_to(m)
                         else:
                             folium.CircleMarker(
-                                start_coords,
-                                radius=6,
+                                path_coords[0],
+                                radius=8,  # Increased marker size
                                 color=color,
                                 fill=True,
+                                fill_opacity=0.7,
                                 popup=f'Stop {i} (Route {route_idx+1})'
                             ).add_to(m)
 
                         folium.CircleMarker(
-                            end_coords,
-                            radius=6,
+                            path_coords[-1],
+                            radius=8,  # Increased marker size
                             color=color,
                             fill=True,
+                            fill_opacity=0.7,
                             popup=f'Stop {i+1} (Route {route_idx+1})'
                         ).add_to(m)
 
@@ -295,19 +296,21 @@ class StreetNetwork:
                         logger.error(f"Could not plot path in route {route_idx} between nodes {start}-{end}: {str(e)}")
                         continue
 
-            # Add a legend
+            # Add a legend with better styling
             legend_html = '''
                 <div style="position: fixed; 
                             bottom: 50px; right: 50px; 
                             border:2px solid grey; z-index:9999; 
                             background-color:white;
                             padding: 10px;
-                            font-size:14px;">
-                    <p><strong>Routes:</strong></p>
+                            font-size:14px;
+                            border-radius: 5px;
+                            box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+                    <p style="margin-bottom:5px;"><strong>Routes:</strong></p>
             '''
             for i in range(len(routes)):
                 color = colors[i % len(colors)]
-                legend_html += f'<p><i style="background: {color};width:20px;height:2px;display:inline-block"></i> Route {i+1}</p>'
+                legend_html += f'<p style="margin:5px 0;"><i style="background: {color};width:20px;height:3px;display:inline-block;margin-right:5px;vertical-align:middle;"></i> Route {i+1}</p>'
             legend_html += '</div>'
             m.get_root().html.add_child(folium.Element(legend_html))
 

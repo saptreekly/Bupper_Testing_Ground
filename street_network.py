@@ -1,6 +1,7 @@
 import osmnx as ox
 import networkx as nx
 import folium
+from folium import plugins
 import numpy as np
 from typing import List, Tuple, Dict, Any
 import logging
@@ -30,7 +31,7 @@ class StreetNetwork:
                 if "San Francisco" in place_name:
                     address = "Union Square, San Francisco, California, USA"
                     logger.info(f"Attempting to fetch network using address: {address}")
-                    self.G = ox.graph_from_address(address, dist=1000, network_type='drive')
+                    self.G = ox.graph_from_address(address, dist=2000, network_type='drive')  # Increased distance
                     logger.info("Successfully fetched network using address")
                 else:
                     logger.info(f"Attempting to fetch network using place name: {place_name}")
@@ -41,7 +42,7 @@ class StreetNetwork:
                 try:
                     logger.info("Falling back to bounding box method")
                     center_lat, center_lon = 37.7749, -122.4194
-                    dist = 1000  # meters
+                    dist = 2000  # Increased distance to 2km
                     north, south, east, west = ox.utils_geo.bbox_from_point((center_lat, center_lon), dist=dist)
                     logger.info(f"Using bounding box: N={north}, S={south}, E={east}, W={west}")
 
@@ -78,7 +79,7 @@ class StreetNetwork:
         c = 2 * math.asin(math.sqrt(a))
         return R * c
 
-    def get_random_nodes(self, n: int, min_distance: float = 200) -> List[int]:
+    def get_random_nodes(self, n: int, min_distance: float = 800) -> List[int]:  # Increased minimum distance
         """Get n random nodes that are at least min_distance meters apart."""
         try:
             start_time = time.time()
@@ -143,7 +144,7 @@ class StreetNetwork:
 
                 attempts += 1
                 if attempts % 100 == 0:
-                    min_distance_current *= 0.8
+                    min_distance_current *= 0.9  # Reduce distance more gradually
                     logger.info(f"Reducing minimum distance to {min_distance_current:.1f}m")
 
             if len(selected_nodes) < n:
@@ -242,7 +243,7 @@ class StreetNetwork:
             # Decode the polyline to get route coordinates
             route_coords = polyline.decode(data["routes"][0]["geometry"])
             # OSRM returns coordinates as [lon, lat], convert to [lat, lon] for Folium
-            route_coords = [(lat, lon) for lat, lon in route_coords]
+            route_coords = [(lat, lon) for lon, lat in route_coords]
 
             logger.info(f"Retrieved route with {len(route_coords)} points")
             logger.info(f"First point: {route_coords[0]}, Last point: {route_coords[-1]}")
@@ -280,7 +281,6 @@ class StreetNetwork:
                 # Plot path between each consecutive pair of nodes
                 for i in range(len(route)-1):
                     try:
-                        # Get coordinates for start and end nodes
                         start_node = route[i]
                         end_node = route[i+1]
 
@@ -296,40 +296,34 @@ class StreetNetwork:
                             logger.error(f"No path coordinates returned for route segment")
                             continue
 
-                        # Verify coordinates are valid
-                        if not all(isinstance(coord, tuple) and len(coord) == 2 for coord in path_coords):
-                            logger.error(f"Invalid coordinates in path")
-                            continue
-
-                        # Add white outline for contrast
-                        outline = folium.PolyLine(
+                        # Add the route line with directional arrows
+                        line = plugins.PolyLineOffset(
                             locations=path_coords,
-                            weight=8,
-                            color='white',
-                            opacity=0.8
-                        )
-                        outline.add_to(m)
-
-                        # Add the colored route line
-                        line = folium.PolyLine(
-                            locations=path_coords,
-                            weight=6,
                             color=color,
-                            opacity=1.0,
+                            weight=4,
+                            opacity=0.8,
                             popup=f'Route {route_idx+1}: Node {start_node} → {end_node}'
-                        )
-                        line.add_to(m)
+                        ).add_to(m)
 
-                        # Add markers for start points
+                        # Add arrow indicators using Folium plugins
+                        plugins.PolyLineTextPath(
+                            line,
+                            text='➔',  # Unicode arrow character
+                            repeat=True,
+                            offset=8,
+                            attributes={'fill': color, 'font-size': '24px'}
+                        ).add_to(m)
+
+                        # Add markers for nodes
                         if route_idx == 0 and i == 0:
                             # Depot marker
                             folium.Marker(
                                 path_coords[0],
-                                popup='Depot',
+                                popup='Depot (Start)',
                                 icon=folium.Icon(color='red', icon='info-sign', prefix='fa')
                             ).add_to(m)
                         else:
-                            # Regular stop marker
+                            # Stop marker with sequence number
                             folium.CircleMarker(
                                 path_coords[0],
                                 radius=8,

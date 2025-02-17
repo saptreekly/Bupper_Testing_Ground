@@ -2,6 +2,7 @@ from flask import Flask, render_template, jsonify, request
 import logging
 from example import benchmark_optimization
 import os
+import time
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -28,15 +29,38 @@ def optimize():
                 'error': 'Maximum number of cities is 6 to ensure reasonable computation time'
             }), 400
 
+        start_time = time.time()
+        timeout = 300  # 5 minutes timeout
+
         logger.info(f"Starting optimization with {n_cities} cities using {backend} backend")
 
-        metrics = benchmark_optimization(
-            n_cities=n_cities,
-            n_vehicles=n_vehicles,
-            place_name=location,
-            backend=backend,
-            hybrid=hybrid
-        )
+        try:
+            metrics = benchmark_optimization(
+                n_cities=n_cities,
+                n_vehicles=n_vehicles,
+                place_name=location,
+                backend=backend,
+                hybrid=hybrid
+            )
+        except RuntimeError as e:
+            logger.error(f"Runtime error during optimization: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': 'Optimization failed. Please try again with different parameters or backend.'
+            }), 500
+        except Exception as e:
+            logger.error(f"Error during optimization: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': str(e)
+            }), 500
+
+        # Check if process is taking too long
+        if time.time() - start_time > timeout:
+            return jsonify({
+                'success': False,
+                'error': 'Optimization timed out. Please try with fewer cities or a different backend.'
+            }), 408
 
         # Extract route information
         routes = metrics.get('routes', [])
@@ -44,15 +68,19 @@ def optimize():
         network = metrics.get('network')
 
         if network and nodes and routes:
-            # Generate the map
+            # Generate both HTML and PNG maps
             node_routes = [[nodes[i] for i in route] for route in routes]
             map_path = f"static/route_maps/route_{backend}_{'hybrid' if hybrid else 'pure'}.html"
+            png_path = f"static/route_maps/route_{backend}_{'hybrid' if hybrid else 'pure'}.png"
+
             os.makedirs(os.path.dirname(map_path), exist_ok=True)
             network.create_folium_map(node_routes, save_path=map_path)
+            network.create_static_map(node_routes, save_path=png_path)
 
             return jsonify({
                 'success': True,
                 'map_path': map_path,
+                'png_path': png_path,
                 'metrics': {
                     'total_time': metrics.get('total_time'),
                     'solution_length': metrics.get('solution_length'),

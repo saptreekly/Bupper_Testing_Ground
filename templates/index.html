@@ -148,6 +148,7 @@
                         <p><strong>Solution Length:</strong> ${data.metrics.solution_length.toFixed(2)}m</p>
                         <p><strong>Gap to Classical:</strong> ${(data.metrics.quantum_classical_gap * 100).toFixed(1)}%</p>
                         <p><strong>Number of Routes:</strong> ${data.metrics.n_routes}</p>
+                        <p><a href="${data.png_path}" target="_blank" class="btn btn-sm btn-secondary mt-2">Download PNG Version</a></p>
                     `;
                 } else {
                     alert('Error: ' + data.error);

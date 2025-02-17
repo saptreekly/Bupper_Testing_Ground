@@ -108,17 +108,28 @@ def optimize():
                 routes = metrics.get('routes', [])
                 if routes:
                     node_routes = [[metrics['nodes'][i] for i in route] for route in routes]
+                    logger.info(f"Generated node routes: {node_routes}")
                     map_filename = f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities"
 
+                    # Ensure static directory exists
+                    os.makedirs('static', exist_ok=True)
+
                     # Create both HTML and PNG versions
+                    map_path = f"static/{map_filename}.html"
+                    png_path = f"static/{map_filename}.png"
+
+                    logger.info(f"Generating map files at: {map_path} and {png_path}")
+
                     metrics['network'].create_folium_map(
                         node_routes,
-                        save_path=f"static/{map_filename}.html"
+                        save_path=map_path
                     )
                     metrics['network'].create_static_map(
                         node_routes,
-                        save_path=f"static/{map_filename}.png"
+                        save_path=png_path
                     )
+
+                    logger.info(f"Map files generated successfully")
 
                     # Create a new dictionary with only serializable data
                     serializable_metrics = {
@@ -135,6 +146,18 @@ def optimize():
                         'map_path': f"/static/{map_filename}.html",
                         'png_path': f"/static/{map_filename}.png"
                     })
+                else:
+                    logger.error("No routes found in metrics")
+                    return jsonify({
+                        'success': False,
+                        'error': 'No routes generated'
+                    }), 500
+            else:
+                logger.error("Missing required data in metrics")
+                return jsonify({
+                    'success': False,
+                    'error': 'Missing required data for map generation'
+                }), 500
 
         except Exception as opt_error:
             logger.error(f"Optimization error: {str(opt_error)}")

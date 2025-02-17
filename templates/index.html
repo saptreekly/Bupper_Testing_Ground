@@ -168,7 +168,12 @@
                     // Update map with cache-busting parameter
                     const mapFrame = document.getElementById('map-frame');
                     const cacheBuster = new Date().getTime();
-                    mapFrame.src = `${data.map_path}?_=${cacheBuster}`;
+                    const mapUrl = `${data.map_path}?_=${cacheBuster}`;
+                    console.log('Loading map from:', mapUrl);
+                    mapFrame.src = mapUrl;
+
+                    // Force iframe reload
+                    mapFrame.contentWindow.location.reload(true);
 
                     // Update metrics
                     const metricsContainer = document.getElementById('metrics-container');

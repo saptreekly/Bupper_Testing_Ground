@@ -357,6 +357,9 @@
 
         // Update dashboard with new optimization results
         function updateDashboard(data) {
+            // Only hide the optimization overlay after updating the dashboard
+            document.getElementById('optimization-overlay').style.display = 'none';
+
             // Update metrics
             document.getElementById('total-time').textContent = `${data.metrics.total_time.toFixed(2)}s`;
             document.getElementById('solution-length').textContent = `${data.metrics.solution_length.toFixed(2)}m`;
@@ -368,17 +371,15 @@
             const cacheBuster = new Date().getTime();
             mapFrame.src = `${data.map_path}?_=${cacheBuster}`;
 
-            // Update optimization progress chart
+            // Update charts
             Plotly.update('metrics-history', {
                 y: [data.metrics.cost_history]
             });
 
-            // Update circuit depth chart
             Plotly.update('circuit-depth', {
                 y: [[data.metrics.initial_depth, data.metrics.optimized_depth]]
             });
 
-            // Update backend comparison
             if (data.metrics.backend_times) {
                 Plotly.update('backend-comparison', {
                     y: [Object.values(data.metrics.backend_times)]
@@ -399,8 +400,13 @@
             document.getElementById('best-cost').textContent = '-';
             document.getElementById('optimization-progress').style.width = '0%';
 
-            // Show optimization overlay instead of loading overlay
+            // Reset and show optimization overlay
             document.getElementById('optimization-overlay').style.display = 'block';
+
+            // Reset live optimization chart
+            Plotly.update('live-optimization-chart', {
+                y: [[]]
+            });
 
             const form = e.target;
             const formData = {
@@ -433,7 +439,6 @@
                             }
                         });
                     }
-                    document.getElementById('optimization-overlay').style.display = 'none';
                     updateDashboard(data);
                 } else {
                     addProgressEntry('Error: ' + data.error, new Date().toLocaleTimeString(), { error: true });

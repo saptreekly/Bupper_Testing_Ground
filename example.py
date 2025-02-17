@@ -1,5 +1,6 @@
 import logging
 from qaoa_core import QAOACircuit
+from qiskit_qaoa import QiskitQAOA  # Add Qiskit implementation
 from qubo_formulation import QUBOFormulation
 from circuit_visualization import CircuitVisualizer
 from utils import Utils
@@ -13,6 +14,7 @@ import matplotlib
 from classical_solver import solve_tsp_brute_force
 from classical_solver import clarke_wright_savings
 import time
+from hybrid_optimizer import HybridOptimizer
 
 matplotlib.use('Agg')  # Force non-interactive backend
 
@@ -150,12 +152,16 @@ def main():
     try:
         parser = argparse.ArgumentParser(description='QAOA Vehicle Routing Optimizer')
         parser.add_argument('--coordinates', type=str, help='City coordinates in format "x1,y1;x2,y2;x3,y3"')
-        parser.add_argument('--cities', type=int, default=4, help='Number of cities (default: 4)')  # Changed to 4 cities
+        parser.add_argument('--cities', type=int, default=4, help='Number of cities (default: 4)')
         parser.add_argument('--grid-size', type=int, default=16, help='Grid size (default: 16)')
         parser.add_argument('--qaoa-depth', type=int, default=1, help='QAOA circuit depth (default: 1)')
         parser.add_argument('--vehicles', type=int, default=1, help='Number of vehicles (default: 1)')
         parser.add_argument('--capacity', type=float, default=10.0, help='Vehicle capacity (default: 10.0)')
         parser.add_argument('--non-interactive', action='store_true', help='Run in non-interactive mode')
+        parser.add_argument('--backend', choices=['pennylane', 'qiskit'], default='qiskit',
+                          help='Choose quantum backend (default: qiskit)')
+        parser.add_argument('--hybrid', action='store_true',
+                          help='Use hybrid quantum-classical optimization')
         args = parser.parse_args()
 
         n_cities = args.cities
@@ -218,8 +224,15 @@ def main():
 
         # Time the quantum solution
         start_time = time.time()
-        circuit = QAOACircuit(n_qubits, depth=1)
-        logger.info("Initialized QAOA circuit with %d qubits", n_qubits)
+        if args.hybrid:
+            circuit = HybridOptimizer(n_qubits, depth=qaoa_depth, backend=args.backend)
+            logger.info(f"Initialized hybrid optimizer with {args.backend} backend")
+        else:
+            if args.backend == 'qiskit':
+                circuit = QiskitQAOA(n_qubits, depth=qaoa_depth)
+            else:
+                circuit = QAOACircuit(n_qubits, depth=qaoa_depth)
+            logger.info(f"Initialized {args.backend} circuit with {n_qubits} qubits")
 
         # Create QUBO matrix with adjusted parameters
         logger.info("Creating QUBO matrix...")
@@ -247,11 +260,21 @@ def main():
         logger.info("Starting QAOA optimization...")
 
         # Run optimization
-        params, costs = circuit.optimize(cost_terms, steps=10)
-        measurements = circuit.circuit(params, cost_terms)
-        binary_solution = decode_measurements(measurements, n_cities)
-        routes = qubo.decode_solution(binary_solution)
-        quantum_time = time.time() - start_time
+        try:
+            params, costs = circuit.optimize(cost_terms, steps=10)
+            if args.backend == 'qiskit':
+                # For Qiskit, we need to get measurements differently
+                measurements = circuit.get_expectation_values(params, cost_terms)
+            else:
+                measurements = circuit.circuit(params, cost_terms)
+
+            binary_solution = decode_measurements(measurements, n_cities)
+            routes = qubo.decode_solution(binary_solution)
+            quantum_time = time.time() - start_time
+        except Exception as opt_error:
+            logger.error(f"Optimization error with {args.backend} backend: %s", str(opt_error))
+            raise
+
 
         # Calculate total quantum route length
         total_route_length = 0

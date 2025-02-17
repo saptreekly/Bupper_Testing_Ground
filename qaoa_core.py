@@ -152,3 +152,11 @@ class QAOACircuit:
         except Exception as e:
             logger.error("Error during optimization: %s", str(e))
             raise
+
+    def get_expectation_values(self, params, cost_terms):
+        """Get expectation values directly from the circuit."""
+        try:
+            return self.circuit(params, cost_terms)
+        except Exception as e:
+            logger.error("Error getting expectation values: %s", str(e))
+            raise

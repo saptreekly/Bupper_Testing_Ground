@@ -321,6 +321,15 @@ wheels = [
 ]
 
 [[package]]
+name = "docplex"
+version = "2.29.241"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a2/5c/020e3f51779909f414ddd16bfba730b3b50ae9914aa8ff000d1598de0b7a/docplex-2.29.241.tar.gz", hash = "sha256:ad5250396be0cea02b732710795bb9e345d9923bbb0bf66520f66eb8f1e988ad", size = 645536 }
+
+[[package]]
 name = "fonttools"
 version = "4.56.0"
 source = { registry = "https://pypi.org/simple" }
@@ -999,6 +1008,20 @@ wheels = [
 ]
 
 [[package]]
+name = "qiskit-algorithms"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "qiskit" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b6/b0/277f075f4758c474f026f2ffc9b6246b2cbe5658fbc95497764834685e15/qiskit_algorithms-0.3.1.tar.gz", hash = "sha256:cba9c573d47c0f9508745a5a2794298084ec4f8833781b426fa9b2cea0fca794", size = 243033 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f9/20/0db766da89de14111c4a1217dbb67d19036eb3e4ffba0fdc25f00e4d1615/qiskit_algorithms-0.3.1-py3-none-any.whl", hash = "sha256:d6c31d88a1ed65a9c6382c233ef10ecb9562e726f7b1b7823a0d178d63d29a0a", size = 310548 },
+]
+
+[[package]]
 name = "qiskit-ibm-provider"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1036,6 +1059,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/21/7b/bedb35b06dfcb4429a69fd205b27b88600c252079b3f3de442d932aa0528/qiskit_ibm_runtime-0.29.0.tar.gz", hash = "sha256:bed95faa8275930f791840be64e909f6a10835865db0bbbc16e8f4e7d6ac008e", size = 2835010 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b8/d9/8782397e68781ada9f5f17bae53802f2fe495bda18222f7a8b0e904b73a3/qiskit_ibm_runtime-0.29.0-py3-none-any.whl", hash = "sha256:efdf7116fddea966f2811237f6acb612293b1f87a8baea231ac483d486f05276", size = 2936364 },
+]
+
+[[package]]
+name = "qiskit-optimization"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "docplex" },
+    { name = "networkx" },
+    { name = "numpy" },
+    { name = "qiskit" },
+    { name = "qiskit-algorithms" },
+    { name = "scipy" },
+    { name = "setuptools" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/80/63/30ae1aa61c407ccd7f2a1499884653cf6be87fd4a216013c226273796a8f/qiskit-optimization-0.6.1.tar.gz", hash = "sha256:0ad8c2bc83fe80657c788b5f282ce4055d0ec005c4876789e5069499ee3c00c0", size = 156898 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/67/7669e6ad0b41b1e4ab79b592a4f1de748cac946169f5409e7a9f4bafef10/qiskit_optimization-0.6.1-py3-none-any.whl", hash = "sha256:3f09f31289dfef66bbbb03b782a94d88a4ba5681c728b4b8e96884de5fc83879", size = 167560 },
 ]
 
 [[package]]
@@ -1103,6 +1144,10 @@ dependencies = [
     { name = "pennylane-lightning" },
     { name = "pennylane-qiskit" },
     { name = "qiskit" },
+    { name = "qiskit-aer" },
+    { name = "qiskit-algorithms" },
+    { name = "qiskit-optimization" },
+    { name = "scipy" },
     { name = "trafilatura" },
 ]
 
@@ -1115,6 +1160,10 @@ requires-dist = [
     { name = "pennylane-lightning", specifier = ">=0.40.0" },
     { name = "pennylane-qiskit", specifier = ">=0.40.0" },
     { name = "qiskit", specifier = ">=1.2.4" },
+    { name = "qiskit-aer", specifier = ">=0.16.1" },
+    { name = "qiskit-algorithms", specifier = ">=0.3.1" },
+    { name = "qiskit-optimization", specifier = ">=0.6.1" },
+    { name = "scipy", specifier = ">=1.15.1" },
     { name = "trafilatura", specifier = ">=2.0.0" },
 ]
 

@@ -1,5 +1,12 @@
 {pkgs}: {
   deps = [
+    pkgs.spdlog
+    pkgs.nlohmann_json
+    pkgs.muparserx
+    pkgs.fmt
+    pkgs.catch2
+    pkgs.xsimd
+    pkgs.libxcrypt
     pkgs.tk
     pkgs.tcl
     pkgs.qhull

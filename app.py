@@ -3,6 +3,7 @@ from flask import Flask, render_template, jsonify, request, send_from_directory
 import logging
 from example import benchmark_optimization
 import time
+import signal
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -38,7 +39,7 @@ def optimize():
         logger.info(f"Starting optimization with {n_cities} cities using {backend} backend")
 
         def check_cancelled():
-            # Check if client disconnected
+            # Check if server shutdown requested
             if request.environ.get('werkzeug.server.shutdown'):
                 logger.info("Server shutdown requested")
                 return True
@@ -115,8 +116,8 @@ def optimize():
 
             return jsonify({
                 'success': True,
-                'map_path': '/' + map_path,  # Add leading slash for absolute path
-                'png_path': '/' + png_path,
+                'map_path': '/static/' + map_path,  # Add /static/ prefix for proper URL
+                'png_path': '/static/' + png_path,
                 'metrics': {
                     'total_time': metrics.get('total_time'),
                     'solution_length': metrics.get('solution_length'),
@@ -137,11 +138,24 @@ def optimize():
             'error': str(e)
         }), 500
 
+@app.route('/static/<path:path>')
+def serve_static(path):
+    logger.info(f"Serving static file: {path}")
+    return send_from_directory('static', path)
+
 if __name__ == '__main__':
     try:
-        logger.info("Starting Flask server on port 5000...")
-        app.run(host='0.0.0.0', port=5000, debug=True)
+        port = 8080
+        logger.info(f"Starting Flask server on port {port}...")
+        logger.info("Static folder path: %s", os.path.abspath('static'))
+        app.run(host='0.0.0.0', port=port, debug=True)
     except OSError as e:
         if "Address already in use" in str(e):
-            logger.error("Port 5000 is in use by another program. Either identify and stop that program, or start the server with a different port.")
+            logger.error(f"Port {port} is in use by another program. Error: {str(e)}")
             raise
+        else:
+            logger.error(f"Failed to start server: {str(e)}")
+            raise
+    except Exception as e:
+        logger.error(f"Unexpected error starting server: {str(e)}")
+        raise

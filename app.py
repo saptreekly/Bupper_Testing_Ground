@@ -87,6 +87,15 @@ def serve_static(filename):
         logger.error(f"Error serving static file {filename}: {str(e)}")
         return f"Error: {str(e)}", 404
 
+@app.route('/dashboard')
+def dashboard():
+    """Serve the interactive visualization dashboard."""
+    try:
+        return render_template('dashboard.html')
+    except Exception as e:
+        logger.error(f"Error rendering dashboard: {str(e)}")
+        return f"Error: {str(e)}", 500
+
 @app.route('/optimize', methods=['POST'])
 def optimize():
     try:
@@ -153,13 +162,20 @@ def optimize():
                             'error': 'Failed to generate map files'
                         }), 500
 
-                    # Create a new dictionary with only serializable data
+                    # Enhanced metrics for visualization
                     serializable_metrics = {
                         'total_time': float(metrics.get('total_time', 0)),
                         'solution_length': float(metrics.get('solution_length', 0)),
                         'quantum_classical_gap': float(metrics.get('quantum_classical_gap', 0)),
                         'n_routes': int(metrics.get('n_routes', 0)),
-                        'optimization_time': float(metrics.get('optimization_time', 0))
+                        'optimization_time': float(metrics.get('optimization_time', 0)),
+                        'initial_depth': int(metrics.get('initial_circuit_depth', 0)),
+                        'optimized_depth': int(metrics.get('optimized_circuit_depth', 0)),
+                        'cost_history': metrics.get('cost_history', []),
+                        'backend_times': {
+                            'qiskit': float(metrics.get('qiskit_time', 0)),
+                            'pennylane': float(metrics.get('pennylane_time', 0))
+                        }
                     }
 
                     return jsonify({

@@ -240,12 +240,13 @@ class StreetNetwork:
             center_point = self.node_positions.unary_union.centroid
             logger.info(f"Map center point: ({center_point.y}, {center_point.x})")
 
+            # Create the base map with a light theme for better route visibility
             m = folium.Map(location=[center_point.y, center_point.x], 
                           zoom_start=13,
                           tiles='cartodbpositron')
 
             # Create a color for each route
-            colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 'darkblue', 'darkgreen']
+            colors = ['#FF0000', '#0000FF', '#00FF00', '#800080', '#FFA500', '#8B0000']
 
             # Plot each route
             for route_idx, route in enumerate(routes):
@@ -264,20 +265,30 @@ class StreetNetwork:
                         logger.info(f"Path from node {start} to {end} has {len(path_coords)} coordinates")
                         logger.info(f"Path coordinates: {path_coords}")
 
-                        # Create a more visible line for the path
+                        # Create a more visible line for the path with outline
+                        # Add white outline for contrast
+                        outline = folium.PolyLine(
+                            locations=path_coords,
+                            weight=8,
+                            color='white',
+                            opacity=0.8
+                        )
+                        outline.add_to(m)
+
+                        # Add the colored route line
                         line = folium.PolyLine(
                             locations=path_coords,
-                            weight=5,  # Increased line weight
+                            weight=6,
                             color=color,
-                            opacity=1.0,  # Increased opacity
-                            popup=f'Route {route_idx+1}: {start} → {end}'  # Added route information
+                            opacity=1.0,
+                            popup=f'Route {route_idx+1}: {start} → {end}'
                         )
                         line.add_to(m)
                         logger.info(f"Added polyline for path {start} → {end}")
 
-                        # Add markers for start and end points with better visibility
-                        # Special marker for depot (first node of first route)
+                        # Add markers for start and end points
                         if route_idx == 0 and i == 0:
+                            # Depot marker
                             marker = folium.Marker(
                                 path_coords[0],
                                 popup='Depot',
@@ -286,9 +297,10 @@ class StreetNetwork:
                             marker.add_to(m)
                             logger.info(f"Added depot marker at {path_coords[0]}")
                         else:
+                            # Regular stop marker
                             marker = folium.CircleMarker(
                                 path_coords[0],
-                                radius=8,  # Increased marker size
+                                radius=8,
                                 color=color,
                                 fill=True,
                                 fill_opacity=0.7,
@@ -300,7 +312,7 @@ class StreetNetwork:
                         # Add end point marker
                         end_marker = folium.CircleMarker(
                             path_coords[-1],
-                            radius=8,  # Increased marker size
+                            radius=8,
                             color=color,
                             fill=True,
                             fill_opacity=0.7,
@@ -313,6 +325,24 @@ class StreetNetwork:
                         logger.error(f"Could not plot path in route {route_idx} between nodes {start}-{end}: {str(e)}")
                         logger.error(f"Error details: {traceback.format_exc()}")
                         continue
+
+            # Add a fixed-position legend with better styling
+            legend_html = '''
+                <div style="position: fixed; 
+                            bottom: 50px; right: 50px; 
+                            border:2px solid grey; z-index:9999; 
+                            background-color:white;
+                            padding: 10px;
+                            font-size:14px;
+                            border-radius: 5px;
+                            box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+                    <p style="margin-bottom:5px;"><strong>Routes:</strong></p>
+            '''
+            for i in range(len(routes)):
+                color = colors[i % len(colors)]
+                legend_html += f'<p style="margin:5px 0;"><i style="background: {color};width:20px;height:3px;display:inline-block;margin-right:5px;vertical-align:middle;"></i> Route {i+1}</p>'
+            legend_html += '</div>'
+            m.get_root().html.add_child(folium.Element(legend_html))
 
             # Save the map
             m.save(save_path)

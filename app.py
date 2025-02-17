@@ -198,31 +198,47 @@ def optimize():
                 routes = metrics.get('routes', [])
                 if routes:
                     logger.info(f"Raw routes received: {routes}")
-                    node_routes = [[metrics['nodes'][i] for i in route] for route in routes]
-                    logger.info(f"Node routes generated: {node_routes}")
+
+                    # Improved multi-vehicle route processing
+                    node_routes = []
+                    for vehicle_idx, route in enumerate(routes):
+                        if route:  # Only process non-empty routes
+                            vehicle_route = [metrics['nodes'][i] for i in route]
+                            node_routes.append(vehicle_route)
+                            logger.info(f"Vehicle {vehicle_idx + 1} route: {vehicle_route}")
+
+                    logger.info(f"All node routes generated: {node_routes}")
 
                     # Log coordinates for verification
-                    coords = metrics['network'].get_node_coordinates([node for route in node_routes for node in route])
-                    logger.info(f"Route coordinates: {coords}")
+                    for vehicle_idx, route in enumerate(node_routes):
+                        coords = metrics['network'].get_node_coordinates([node for node in route])
+                        logger.info(f"Vehicle {vehicle_idx + 1} route coordinates: {coords}")
 
                     map_filename = f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities"
 
                     # Ensure static directory exists and is writable
                     os.makedirs('static', exist_ok=True)
 
-                    # Create both HTML and PNG versions
+                    # Create both HTML and PNG versions with multiple route colors
                     map_path = os.path.join('static', f"{map_filename}.html")
                     png_path = os.path.join('static', f"{map_filename}.png")
 
                     logger.info(f"Generating map files at: {map_path} and {png_path}")
 
+                    # Use different colors for each vehicle's route
+                    route_colors = ['blue', 'red', 'green', 'purple', 'orange']  # Add more colors if needed
+                    colored_routes = [(route, route_colors[i % len(route_colors)]) 
+                                    for i, route in enumerate(node_routes)]
+
                     metrics['network'].create_folium_map(
                         node_routes,
-                        save_path=map_path
+                        save_path=map_path,
+                        route_colors=route_colors[:len(node_routes)]
                     )
                     metrics['network'].create_static_map(
                         node_routes,
-                        save_path=png_path
+                        save_path=png_path,
+                        route_colors=route_colors[:len(node_routes)]
                     )
 
                     # Verify files were created

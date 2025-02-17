@@ -255,7 +255,7 @@ class StreetNetwork:
             logger.error(traceback.format_exc())
             raise
 
-    def create_folium_map(self, routes: List[List[int]], save_path: str = "street_map.html"):
+    def create_folium_map(self, routes: List[List[int]], save_path: str = "street_map.html", route_colors=None):
         """Create an interactive map visualization of the routes."""
         try:
             start_time = time.time()
@@ -271,7 +271,7 @@ class StreetNetwork:
                           tiles='cartodbpositron')
 
             # Create a color for each route
-            colors = ['#FF0000', '#0000FF', '#00FF00', '#800080', '#FFA500', '#8B0000']
+            colors = route_colors or ['#FF0000', '#0000FF', '#00FF00', '#800080', '#FFA500', '#8B0000']
 
             # Plot each route
             for route_idx, route in enumerate(routes):
@@ -356,27 +356,16 @@ class StreetNetwork:
             legend_html += '</div>'
             m.get_root().html.add_child(folium.Element(legend_html))
 
-            # Ensure the save path is in the static directory
-            if not save_path.startswith('static/'):
-                save_path = f'static/{save_path}'
-
             # Save the map
             m.save(save_path)
-            logger.info(f"Interactive map saved to {save_path}")
-
-            # Verify file was created
-            if os.path.exists(save_path):
-                file_size = os.path.getsize(save_path)
-                logger.info(f"Map file created successfully, size: {file_size} bytes")
-            else:
-                logger.error(f"Failed to create map file at {save_path}")
+            logger.info(f"Interactive map saved to {save_path} (time: {time.time() - start_time:.1f}s)")
 
         except Exception as e:
             logger.error(f"Error creating map visualization: {str(e)}")
             logger.error(traceback.format_exc())
             raise
 
-    def create_static_map(self, routes: List[List[int]], save_path: str = "route_map.png"):
+    def create_static_map(self, routes: List[List[int]], save_path: str = "route_map.png", route_colors=None):
         """Create a static map visualization of the routes."""
         try:
             start_time = time.time()
@@ -385,9 +374,6 @@ class StreetNetwork:
             # Create figure
             plt.figure(figsize=(12, 8))
 
-            # Get center point of the network
-            center_point = self.node_positions.unary_union.centroid
-
             # Plot the street network edges
             for _, row in ox.graph_to_gdfs(self.G, nodes=False).iterrows():
                 plt.plot([row.geometry.coords[0][0], row.geometry.coords[1][0]],
@@ -395,7 +381,7 @@ class StreetNetwork:
                         color='gray', alpha=0.2, linewidth=1, zorder=1)
 
             # Create a color for each route
-            colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 'darkblue', 'darkgreen']
+            colors = route_colors or ['red', 'blue', 'green', 'purple', 'orange', 'darkred']
 
             # Plot each route
             for route_idx, route in enumerate(routes):
@@ -404,28 +390,32 @@ class StreetNetwork:
 
                 # Plot path between each consecutive pair of nodes
                 for i in range(len(route)-1):
-                    start = route[i]
-                    end = route[i+1]
-
                     try:
-                        path = nx.shortest_path(self.G, start, end, weight='length')
-                        path_coords = self.get_node_coordinates(path)
+                        start_coords = self.get_node_coordinates([route[i]])[0]
+                        end_coords = self.get_node_coordinates([route[i+1]])[0]
 
-                        # Extract coordinates for plotting
-                        lats = [coord[0] for coord in path_coords]
-                        lons = [coord[1] for coord in path_coords]
+                        # Get route using OSRM
+                        path_coords = self.get_osrm_route(start_coords, end_coords)
 
-                        # Plot the path
-                        plt.plot(lons, lats, color=color, linewidth=2, zorder=3)
+                        if path_coords:
+                            # Extract coordinates for plotting
+                            lats = [coord[0] for coord in path_coords]
+                            lons = [coord[1] for coord in path_coords]
 
-                        # Add markers for start and end points
-                        if route_idx == 0 and i == 0:  # Depot
-                            plt.plot(lons[0], lats[0], 'r^', markersize=12, label='Depot', zorder=4)
-                        else:  # Other cities
-                            plt.plot(lons[0], lats[0], 'bo', markersize=8, zorder=4)
+                            # Plot the path
+                            plt.plot(lons, lats, color=color, linewidth=2, 
+                                   label=f'Route {route_idx+1}' if i == 0 else "", zorder=3)
+
+                            # Add markers for start and end points
+                            if route_idx == 0 and i == 0:  # Depot
+                                plt.plot(lons[0], lats[0], 'r^', markersize=12, 
+                                       label='Depot', zorder=4)
+                            else:  # Other cities
+                                plt.plot(lons[0], lats[0], 'o', color=color, 
+                                       markersize=8, zorder=4)
 
                     except Exception as e:
-                        logger.warning(f"Could not plot path in route {route_idx}: {str(e)}")
+                        logger.error(f"Error plotting route segment: {str(e)}")
                         continue
 
             # Set plot bounds
@@ -433,17 +423,13 @@ class StreetNetwork:
             plt.xlim([bounds[0], bounds[2]])
             plt.ylim([bounds[1], bounds[3]])
 
-            plt.title('Optimized Vehicle Routes')
+            plt.title('Multi-Vehicle Route Optimization')
             plt.xlabel('Longitude')
             plt.ylabel('Latitude')
             plt.legend()
             plt.grid(True, alpha=0.3)
 
-            # Ensure the save path is in the static directory
-            if not save_path.startswith('static/'):
-                save_path = f'static/{save_path}'
-
-            # Save the map
+            # Save the map with high resolution
             plt.savefig(save_path, bbox_inches='tight', dpi=300)
             plt.close()
             logger.info(f"Static map saved to {save_path} (time: {time.time() - start_time:.1f}s)")

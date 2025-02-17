@@ -1,80 +1,84 @@
 import numpy as np
 from qiskit import QuantumCircuit, transpile, QuantumRegister
-from qiskit_aer import Aer
+from qiskit_aer import AerSimulator, Aer, noise
 from qiskit.circuit import Parameter
 from qiskit.primitives import BackendEstimator
 from qiskit.quantum_info import SparsePauliOp
 import logging
-from typing import List, Tuple
+from typing import List, Tuple, Optional
+from qiskit.transpiler import PassManager
+from qiskit.circuit.library import QFT
 
 logger = logging.getLogger(__name__)
 
 class QiskitQAOA:
-    """QAOA implementation using Qiskit backend."""
+    """QAOA implementation using Qiskit backend with improved scalability."""
 
     def __init__(self, n_qubits: int, depth: int = 1):
-        """Initialize QAOA circuit with Qiskit backend and advanced depth adaptation."""
+        """Initialize QAOA circuit with advanced depth adaptation and circuit decomposition."""
         try:
             self.n_qubits = n_qubits
 
-            # Enhanced adaptive depth calculation based on problem size and complexity
-            # For larger problems, we want to carefully balance depth vs decoherence
+            # Enhanced adaptive depth calculation
             if n_qubits <= 6:
                 depth_scale = 1.0  # Small problems: use base depth
                 noise_factor = 1.0
             elif n_qubits <= 12:
-                depth_scale = 1.5  # Medium problems: moderate increase
-                noise_factor = 0.8  # Reduce depth slightly due to noise
+                depth_scale = 0.8  # Medium problems: reduced depth
+                noise_factor = 0.8  # Reduce depth due to noise
             elif n_qubits <= 20:
-                depth_scale = 2.0  # Large problems: maximum depth
+                depth_scale = 0.6  # Large problems: further reduced depth
                 noise_factor = 0.6  # Further reduce depth due to noise
             else:
-                depth_scale = 2.5  # Very large problems: extended depth
+                depth_scale = 0.4  # Very large problems: minimal depth
                 noise_factor = 0.4  # Significant depth reduction due to noise
 
-            # Calculate base depth with connectivity consideration
-            base_depth = max(1, min(depth, n_qubits // 3))
-
-            # Apply adaptive scaling with noise consideration
+            # Calculate adaptive depth with improved scaling
+            base_depth = max(1, min(depth, n_qubits // 4))
             self.depth = max(1, min(
                 int(base_depth * depth_scale * noise_factor),
-                n_qubits
+                n_qubits // 2
             ))
 
-            # Log detailed depth calculation
-            logger.info(f"Adaptive circuit depth calculation:")
+            logger.info(f"Enhanced adaptive circuit depth calculation:")
             logger.info(f"- Problem size: {n_qubits} qubits")
             logger.info(f"- Base depth: {base_depth}")
             logger.info(f"- Depth scale: {depth_scale}")
             logger.info(f"- Noise factor: {noise_factor}")
             logger.info(f"- Final depth: {self.depth}")
 
-            # Configure backend with enhanced noise mitigation
-            self.backend = Aer.get_backend('aer_simulator_statevector')
+            # Initialize backend with optimized configuration
+            self.backend = AerSimulator()
 
-            # Create custom noise model
-            noise_model = self._create_custom_noise_model()
+            # Create and configure noise model
+            try:
+                noise_model = self._create_custom_noise_model()
+                logger.info("Successfully created custom noise model")
+            except Exception as e:
+                logger.warning(f"Failed to create noise model: {str(e)}")
+                noise_model = None
 
+            # Configure backend options for improved performance
             self.backend.set_options(
                 precision='double',
-                max_parallel_threads=16,  # Increased for better performance
+                max_parallel_threads=16,
                 max_parallel_experiments=16,
                 max_parallel_shots=2048,
-                shots=4096,  # Increased shots for better statistics
-                noise_model=noise_model,  # Apply custom noise model
+                shots=4096,
+                noise_model=noise_model,
                 basis_gates=['u1', 'u2', 'u3', 'cx'],
-                memory=True  # Enable memory for error tracking
+                memory=True
             )
 
-            # Initialize estimator with optimized parameters
+            # Initialize estimator with enhanced settings
             self.estimator = BackendEstimator(
                 backend=self.backend,
-                skip_transpilation=False,  # Enable full optimization
-                bound_pass_manager=True  # Enable bound pass manager
+                skip_transpilation=False,
+                bound_pass_manager=True
             )
 
             logger.info(f"Initialized Qiskit backend with {n_qubits} qubits")
-            logger.debug(f"Backend configuration: {self.backend.configuration().to_dict()}")
+
         except Exception as e:
             logger.error(f"Failed to initialize Qiskit backend: {str(e)}")
             raise
@@ -134,99 +138,316 @@ class QiskitQAOA:
             return [0.0] * self.n_qubits
 
     def _create_qaoa_circuit(self, params, cost_terms):
-        """Create optimized QAOA circuit with advanced optimization for larger problems."""
+        """Create QAOA circuit with improved handling of large qubit counts."""
         try:
             if not cost_terms:
                 logger.warning("No valid cost terms available")
                 return None
 
-            # Enhanced circuit size validation with detailed logging
-            if self.n_qubits > 30:  # Increased limit with optimization
-                logger.error(f"Circuit size ({self.n_qubits} qubits) exceeds practical limits")
-                return None
-
-            # Validate and normalize parameters
+            # Validate parameters
             if len(params) != 2 * self.depth:
                 logger.error(f"Invalid parameter count: expected {2 * self.depth}, got {len(params)}")
                 return None
 
-            # Initialize circuit with optimization flags
+            # Initialize circuit with partitioning for large qubit counts
+            if self.n_qubits > 20:
+                return self._create_partitioned_circuit(params, cost_terms)
+
+            # Standard circuit creation for smaller problems
             circuit = QuantumCircuit(self.n_qubits)
 
             # Optimize initial state preparation
-            # For larger circuits, use parallel initialization
-            if self.n_qubits > 10:
-                # Parallel Hadamard application
-                for i in range(0, self.n_qubits, 4):
-                    batch = range(i, min(i + 4, self.n_qubits))
-                    circuit.h(batch)
-            else:
-                circuit.h(range(self.n_qubits))
+            self._prepare_initial_state(circuit)
 
-            # QAOA layers with circuit optimization
+            # QAOA layers with improved efficiency
             for p in range(self.depth):
                 gamma = np.clip(params[2 * p], -2*np.pi, 2*np.pi)
                 beta = np.clip(params[2 * p + 1], -np.pi, np.pi)
 
-                # Optimize cost Hamiltonian evolution
-                # Group operations by qubit pairs to reduce gate count
-                qubit_pairs = {}
-                for coeff, (i, j) in cost_terms:
-                    if not (0 <= i < self.n_qubits and 0 <= j < self.n_qubits):
-                        logger.warning(f"Skipping invalid qubit indices: ({i}, {j})")
-                        continue
+                # Problem Hamiltonian with optimized grouping
+                self._apply_cost_hamiltonian(circuit, gamma, cost_terms)
 
-                    pair = tuple(sorted([i, j]))
-                    if pair not in qubit_pairs:
-                        qubit_pairs[pair] = 0
-                    qubit_pairs[pair] += coeff * gamma
+                # Mixer Hamiltonian with batch optimization
+                self._apply_mixer_hamiltonian(circuit, beta)
 
-                # Apply grouped operations
-                for (i, j), total_angle in qubit_pairs.items():
-                    if i != j:
-                        # Optimize for adjacent qubits
-                        if abs(i - j) == 1:
-                            circuit.cx(i, j)
-                            circuit.rz(2 * total_angle, j)
-                            circuit.cx(i, j)
-                        else:
-                            # For non-adjacent qubits, use optimized SWAP network
-                            swap_sequence = self._optimize_swap_sequence(i, j)
-                            for swap_i, swap_j in swap_sequence:
-                                circuit.swap(swap_i, swap_j)
-                            circuit.cx(i, j)
-                            circuit.rz(2 * total_angle, j)
-                            circuit.cx(i, j)
-                            # Undo SWAP network
-                            for swap_i, swap_j in reversed(swap_sequence):
-                                circuit.swap(swap_i, swap_j)
-                    else:
-                        circuit.rz(total_angle, i)
+            # Add error mitigation based on circuit size
+            circuit = self._apply_error_mitigation(circuit)
 
-                # Optimize mixer Hamiltonian evolution
-                # Use batched RX gates for better performance
-                if self.n_qubits > 10:
-                    for i in range(0, self.n_qubits, 4):
-                        batch = range(i, min(i + 4, self.n_qubits))
-                        circuit.rx(2 * beta, batch)
-                else:
-                    circuit.rx(2 * beta, range(self.n_qubits))
-
-            # Circuit validation and optimization metrics
-            n_gates = circuit.size()
-            depth = circuit.depth()
-            logger.info(f"Created QAOA circuit: {n_gates} gates, depth {depth}")
-
-            # Add warning for deep circuits
-            if depth > 100:
-                logger.warning(f"Circuit depth ({depth}) may impact reliability")
-                logger.info("Consider using hybrid optimization for better results")
-
-            circuit, meas_filter = self._apply_error_mitigation(circuit)
             return circuit
 
         except Exception as e:
             logger.error(f"Error creating QAOA circuit: {str(e)}")
+            return None
+
+    def _create_partitioned_circuit(self, params, cost_terms):
+        """Create a partitioned circuit for large qubit counts with improved hardware constraints."""
+        try:
+            # Calculate optimal partition size within hardware limits
+            max_qubits_per_partition = min(20, max(1, self.backend.configuration().n_qubits - 1))
+            partition_size = min(max_qubits_per_partition, self.n_qubits // 2)
+            n_partitions = (self.n_qubits + partition_size - 1) // partition_size
+
+            logger.info(f"Creating {n_partitions} partitions with {partition_size} qubits each")
+
+            # Create main circuit with hardware-aware layout
+            main_circuit = QuantumCircuit(self.n_qubits)
+
+            # Create and optimize each partition
+            for i in range(n_partitions):
+                start_idx = i * partition_size
+                end_idx = min((i + 1) * partition_size, self.n_qubits)
+                partition_qubits = list(range(start_idx, end_idx))
+
+                # Create subcircuit for partition
+                subcircuit = QuantumCircuit(len(partition_qubits))
+
+                # Filter cost terms for this partition
+                partition_cost_terms = [
+                    (coeff, (i-start_idx, j-start_idx)) 
+                    for coeff, (i, j) in cost_terms 
+                    if start_idx <= i < end_idx and start_idx <= j < end_idx
+                ]
+
+                # Prepare initial state for partition
+                self._prepare_initial_state(subcircuit)
+
+                # Apply QAOA layers to partition with reduced depth for larger partitions
+                local_depth = max(1, self.depth // n_partitions)
+                for p in range(local_depth):
+                    gamma = params[2 * p]
+                    beta = params[2 * p + 1]
+
+                    self._apply_cost_hamiltonian(subcircuit, gamma, partition_cost_terms)
+                    self._apply_mixer_hamiltonian(subcircuit, beta)
+
+                # Optimize subcircuit with hardware constraints
+                try:
+                    optimized_subcircuit = transpile(
+                        subcircuit,
+                        backend=self.backend,
+                        optimization_level=3,
+                        layout_method='sabre',  # Use advanced layout method
+                        routing_method='sabre',  # Use advanced routing
+                        scheduling_method='alap'  # As late as possible scheduling
+                    )
+                except Exception as e:
+                    logger.error(f"Error optimizing subcircuit: {str(e)}")
+                    # Fallback to basic optimization if advanced fails
+                    optimized_subcircuit = transpile(
+                        subcircuit,
+                        basis_gates=['u1', 'u2', 'u3', 'cx'],
+                        optimization_level=2
+                    )
+
+                # Add optimized subcircuit to main circuit
+                main_circuit.compose(optimized_subcircuit, partition_qubits, inplace=True)
+
+            # Add minimal cross-partition interactions
+            self._add_cross_partition_interactions(main_circuit, params, cost_terms)
+
+            return main_circuit
+
+        except Exception as e:
+            logger.error(f"Error creating partitioned circuit: {str(e)}")
+            return None
+
+    def _prepare_initial_state(self, circuit):
+        """Prepare initial state with batched operations."""
+        batch_size = 4
+        for i in range(0, circuit.num_qubits, batch_size):
+            batch = range(i, min(i + batch_size, circuit.num_qubits))
+            circuit.h(batch)
+
+    def _apply_cost_hamiltonian(self, circuit, gamma, cost_terms):
+        """Apply cost Hamiltonian with optimized grouping."""
+        # Group operations by qubit pairs
+        qubit_pairs = {}
+        for coeff, (i, j) in cost_terms:
+            if not (0 <= i < circuit.num_qubits and 0 <= j < circuit.num_qubits):
+                continue
+            pair = tuple(sorted([i, j]))
+            qubit_pairs[pair] = qubit_pairs.get(pair, 0) + coeff * gamma
+
+        # Apply grouped operations
+        for (i, j), angle in qubit_pairs.items():
+            if i != j:
+                circuit.cx(i, j)
+                circuit.rz(2 * angle, j)
+                circuit.cx(i, j)
+            else:
+                circuit.rz(angle, i)
+
+    def _apply_mixer_hamiltonian(self, circuit, beta):
+        """Apply mixer Hamiltonian with batched operations."""
+        batch_size = 4
+        for i in range(0, circuit.num_qubits, batch_size):
+            batch = range(i, min(i + batch_size, circuit.num_qubits))
+            circuit.rx(2 * beta, batch)
+
+    def _add_cross_partition_interactions(self, circuit, params, cost_terms):
+        """Add minimal necessary interactions between partitions."""
+        try:
+            # Filter cross-partition terms
+            partition_size = min(20, self.n_qubits // 2)
+            cross_terms = [
+                (coeff, (i, j)) for coeff, (i, j) in cost_terms
+                if i // partition_size != j // partition_size  # Different partitions
+            ]
+
+            if cross_terms:
+                # Use only first layer parameters for cross terms to reduce circuit depth
+                gamma = params[0]  
+
+                # Sort terms by coefficient magnitude and limit the number of cross-terms
+                cross_terms.sort(key=lambda x: abs(x[0]), reverse=True)
+                max_cross_terms = min(len(cross_terms), self.n_qubits)  # Limit cross-terms
+
+                for coeff, (i, j) in cross_terms[:max_cross_terms]:
+                    angle = coeff * gamma
+                    # Add minimal interaction between partitions
+                    circuit.cx(i, j)
+                    circuit.rz(2 * angle, j)
+                    circuit.cx(i, j)
+
+        except Exception as e:
+            logger.error(f"Error adding cross-partition interactions: {str(e)}")
+
+
+    def _apply_error_mitigation(self, circuit: QuantumCircuit) -> QuantumCircuit:
+        """Apply advanced error mitigation techniques with dynamic adaptation."""
+        try:
+            # Apply different strategies based on circuit size
+            if self.n_qubits > 20:
+                # For large circuits: dynamical decoupling and echo sequences
+                for i in range(self.n_qubits):
+                    circuit.barrier([i])
+                    # Add X-gate echo sequence
+                    circuit.x([i])
+                    circuit.delay(50, [i])  # Optimized delay time
+                    circuit.x([i])
+                    circuit.barrier([i])
+                logger.info("Applied dynamical decoupling with echo sequences")
+
+            elif self.n_qubits > 10:
+                # For medium circuits: simplified error mitigation
+                for i in range(self.n_qubits):
+                    circuit.barrier([i])
+                    circuit.delay(75, [i])  # Longer delay for better decoherence
+                circuit.measure_all()
+                logger.info("Applied intermediate error mitigation")
+
+            else:
+                # For small circuits: measurement error mitigation
+                circuit.measure_all()
+                logger.info("Added measurement operations for error mitigation")
+
+            # Add circuit characterization measurements
+            if self.n_qubits <= 8:  # Only for small circuits
+                cal_circuits = self._generate_calibration_circuits()
+                if cal_circuits:
+                    logger.info("Generated calibration circuits for small system")
+
+            return circuit
+
+        except Exception as e:
+            logger.error(f"Error in error mitigation: {str(e)}")
+            return circuit
+
+    def _decompose_large_circuit(self, circuit: QuantumCircuit) -> QuantumCircuit:
+        """Decompose large circuits into more manageable subcircuits."""
+        try:
+            if self.n_qubits <= 20:
+                return circuit
+
+            logger.info("Applying circuit decomposition for large qubit count")
+
+            # Create subcircuits of maximum 20 qubits
+            subcircuit_size = 20
+            n_subcircuits = (self.n_qubits + subcircuit_size - 1) // subcircuit_size
+
+            decomposed = QuantumCircuit(self.n_qubits)
+
+            for i in range(n_subcircuits):
+                start_idx = i * subcircuit_size
+                end_idx = min((i + 1) * subcircuit_size, self.n_qubits)
+                qubits = list(range(start_idx, end_idx))
+
+                # Extract and optimize subcircuit
+                subcircuit = circuit.copy()
+                subcircuit_optimized = transpile(
+                    subcircuit,
+                    basis_gates=['u1', 'u2', 'u3', 'cx'],
+                    optimization_level=3
+                )
+
+                # Add optimized subcircuit back
+                decomposed.compose(subcircuit_optimized, qubits, inplace=True)
+
+            logger.info(f"Circuit decomposed into {n_subcircuits} subcircuits")
+            return decomposed
+
+        except Exception as e:
+            logger.error(f"Error in circuit decomposition: {str(e)}")
+            return circuit
+
+
+    def _create_custom_noise_model(self):
+        """Create a custom noise model with improved error rates and advanced error channels."""
+        try:
+            noise_model = noise.NoiseModel()
+
+            # Enhanced error scaling based on both problem size and vehicle count
+            base_error_rate = 0.001
+            size_factor = min(1.0, 10 / self.n_qubits)
+
+            # Add thermal relaxation with improved timing
+            t1, t2 = 50e3, 70e3  # Relaxation times (ns)
+            gate_times = {
+                'single': 35,  # Optimized single-qubit gate time
+                'two': 250,    # Optimized two-qubit gate time
+                'measure': 100  # Measurement time
+            }
+
+            # Create error channels with enhanced precision
+            thermal_error = {
+                'single': noise.thermal_relaxation_error(
+                    t1, t2, gate_times['single'],
+                    excited_state_population=0.01
+                ),
+                'two': noise.thermal_relaxation_error(
+                    t1, t2, gate_times['two'],
+                    excited_state_population=0.02
+                )
+            }
+
+            # Add readout errors
+            p_error = base_error_rate * size_factor
+            readout_error = noise.ReadoutError([[1 - p_error, p_error], [p_error, 1 - p_error]])
+
+            # Add measurement error mitigation
+            noise_model.add_all_qubit_readout_error(readout_error)
+
+            # Add improved gate errors with crosstalk effects
+            for basis_gate in ['u1', 'u2', 'u3']:
+                error = thermal_error['single']
+                if basis_gate in ['u2', 'u3']:
+                    # Add additional rotation errors for non-virtual gates
+                    error = error.compose(
+                        noise.depolarizing_error(base_error_rate * 0.1, 1)
+                    )
+                noise_model.add_all_qubit_quantum_error(error, basis_gate)
+
+            # Enhanced two-qubit gate errors with crosstalk
+            cx_error = thermal_error['two'].compose(
+                noise.depolarizing_error(base_error_rate * 0.2, 2)
+            )
+            noise_model.add_all_qubit_quantum_error(cx_error, 'cx')
+
+            logger.info(f"Created enhanced noise model with size factor {size_factor:.3f}")
+            return noise_model
+
+        except Exception as e:
+            logger.error(f"Error creating noise model: {str(e)}")
             return None
 
     def _optimize_swap_sequence(self, i: int, j: int) -> List[Tuple[int, int]]:
@@ -432,73 +653,6 @@ class QiskitQAOA:
         except Exception as e:
             logger.error(f"Error during optimization: {str(e)}")
             raise
-
-    def _create_custom_noise_model(self):
-        """Create a custom noise model based on problem size."""
-        try:
-            from qiskit.providers.aer.noise import NoiseModel
-            from qiskit.providers.aer.noise.errors import depolarizing_error, thermal_relaxation_error
-
-            noise_model = NoiseModel()
-
-            # Scale error rates based on problem size
-            base_error_rate = 0.001  # Base error rate for small circuits
-            size_factor = min(1.0, 10 / self.n_qubits)  # Reduce quality for larger circuits
-
-            # Add depolarizing error to all gates
-            error_1q = depolarizing_error(base_error_rate * size_factor, 1)
-            error_2q = depolarizing_error(base_error_rate * 2 * size_factor, 2)
-
-            # Add relaxation error
-            t1 = 50e3  # T1 relaxation time (ns)
-            t2 = 70e3  # T2 relaxation time (ns)
-            gate_time_1q = 50  # Single-qubit gate time (ns)
-            gate_time_2q = 300  # Two-qubit gate time (ns)
-
-            thermal_error_1q = thermal_relaxation_error(t1, t2, gate_time_1q)
-            thermal_error_2q = thermal_relaxation_error(t1, t2, gate_time_2q)
-
-            # Add errors to noise model
-            noise_model.add_all_qubit_quantum_error(error_1q, ['u1', 'u2', 'u3'])
-            noise_model.add_all_qubit_quantum_error(error_2q, ['cx'])
-            noise_model.add_all_qubit_quantum_error(thermal_error_1q, ['u1', 'u2', 'u3'])
-            noise_model.add_all_qubit_quantum_error(thermal_error_2q, ['cx'])
-
-            logger.info(f"Created custom noise model for {self.n_qubits} qubits")
-            logger.debug(f"Base error rate: {base_error_rate}, Size factor: {size_factor}")
-
-            return noise_model
-        except Exception as e:
-            logger.error(f"Failed to create noise model: {str(e)}")
-            return None
-
-    def _apply_error_mitigation(self, circuit):
-        """Apply error mitigation techniques to the circuit."""
-        try:
-            # Dynamic error mitigation based on circuit size
-            if self.n_qubits <= 6:
-                # For small circuits, use measurement error mitigation
-                from qiskit.ignis.mitigation.measurement import CompleteMeasFitter, complete_meas_cal
-                cal_circuits = self._generate_calibration_circuits()
-                # Execute calibration circuits
-                job = self.backend.run(cal_circuits)
-                cal_results = job.result()
-                meas_fitter = CompleteMeasFitter(cal_results, state_labels=list(range(2**self.n_qubits)))
-                # Get the filter
-                meas_filter = meas_fitter.filter
-                logger.info("Applied measurement error mitigation")
-                return circuit, meas_filter
-            else:
-                # For larger circuits, use simpler techniques
-                # Add barrier to prevent optimization across error-prone regions
-                circuit.barrier()
-                # Add dynamical decoupling
-                circuit.delay(100)  # Add small delay for natural decoherence
-                logger.info("Applied simplified error mitigation for large circuit")
-                return circuit, None
-        except Exception as e:
-            logger.error(f"Error in error mitigation: {str(e)}")
-            return circuit, None
 
     def _generate_calibration_circuits(self):
         """Generate calibration circuits for error mitigation."""

@@ -158,7 +158,8 @@ from typing import Dict, Any
 import numpy as np
 
 def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
-                         backend: str, hybrid: bool = False, check_cancelled=None) -> Dict[str, Any]:
+                         backend: str, hybrid: bool = False, max_steps: int = 10,
+                         timeout: int = 60, check_cancelled=None) -> Dict[str, Any]:
     metrics = {}
     start_time = time.time()
 
@@ -237,7 +238,7 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
             raise RuntimeError("Optimization cancelled by user")
 
         optimization_start = time.time()
-        steps = min(100, n_qubits * 5)
+        steps = min(max_steps, n_qubits * 5)
 
         # Backend-specific optimization
         if backend == 'qiskit':

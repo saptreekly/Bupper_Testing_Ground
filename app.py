@@ -108,6 +108,10 @@ def optimize():
 
         logger.info(f"Starting optimization with {n_cities} cities, {n_vehicles} vehicles in {location}")
 
+        # Limit maximum steps based on problem size to prevent long running optimizations
+        max_steps = min(50, 100 // n_cities)  # Reduce steps for larger problems
+        timeout = 60  # Set 60 second timeout
+
         try:
             metrics = benchmark_optimization(
                 n_cities=n_cities,
@@ -115,6 +119,8 @@ def optimize():
                 place_name=location,
                 backend=backend,
                 hybrid=hybrid,
+                max_steps=max_steps,
+                timeout=timeout,
                 check_cancelled=None
             )
 
@@ -162,16 +168,15 @@ def optimize():
                             'error': 'Failed to generate map files'
                         }), 500
 
-                    # Enhanced metrics for visualization
+                    # Enhanced metrics for visualization with reduced cost history
                     serializable_metrics = {
                         'total_time': float(metrics.get('total_time', 0)),
                         'solution_length': float(metrics.get('solution_length', 0)),
                         'quantum_classical_gap': float(metrics.get('quantum_classical_gap', 0)),
                         'n_routes': int(metrics.get('n_routes', 0)),
-                        'optimization_time': float(metrics.get('optimization_time', 0)),
                         'initial_depth': int(metrics.get('initial_circuit_depth', 0)),
                         'optimized_depth': int(metrics.get('optimized_circuit_depth', 0)),
-                        'cost_history': metrics.get('cost_history', []),
+                        'cost_history': metrics.get('cost_history', [])[-20:],  # Only last 20 points for visualization
                         'backend_times': {
                             'qiskit': float(metrics.get('qiskit_time', 0)),
                             'pennylane': float(metrics.get('pennylane_time', 0))

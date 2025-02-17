@@ -22,6 +22,18 @@
             height: 400px;
             margin-bottom: 20px;
         }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
         .backend-selector {
             margin-bottom: 20px;
         }
@@ -47,9 +59,21 @@
     </style>
 </head>
 <body>
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="spinner-container">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <div class="optimization-status">
+                Optimizing routes...<br>
+                <small class="text-muted">This may take a few minutes</small>
+            </div>
+        </div>
+    </div>
+
     <div class="container-fluid mt-4">
         <h1>QAOA Route Optimizer Dashboard</h1>
-        
+
         <div class="row">
             <!-- Control Panel -->
             <div class="col-md-3">
@@ -148,7 +172,7 @@
     </div>
 
     <script>
-        // Initialize Plotly charts
+        // Initialize Plotly charts with empty data
         function initializeCharts() {
             // Optimization Progress Chart
             Plotly.newPlot('metrics-history', [{
@@ -186,6 +210,9 @@
 
         // Update dashboard with new optimization results
         function updateDashboard(data) {
+            // Show loading overlay
+            document.getElementById('loading-overlay').style.display = 'none';
+
             // Update metrics
             document.getElementById('total-time').textContent = `${data.metrics.total_time.toFixed(2)}s`;
             document.getElementById('solution-length').textContent = `${data.metrics.solution_length.toFixed(2)}m`;
@@ -221,6 +248,10 @@
         // Handle form submission
         document.getElementById('optimization-form').addEventListener('submit', async (e) => {
             e.preventDefault();
+
+            // Show loading overlay
+            document.getElementById('loading-overlay').style.display = 'flex';
+
             const form = e.target;
             const formData = {
                 n_cities: parseInt(form.n_cities.value),
@@ -243,9 +274,11 @@
                     updateDashboard(data);
                 } else {
                     alert('Error: ' + data.error);
+                    document.getElementById('loading-overlay').style.display = 'none';
                 }
             } catch (error) {
                 alert('Error during optimization: ' + error.message);
+                document.getElementById('loading-overlay').style.display = 'none';
             }
         });
     </script>

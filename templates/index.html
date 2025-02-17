@@ -13,12 +13,43 @@
         .metrics-card {
             margin-top: 20px;
         }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+        .spinner-container {
+            text-align: center;
+        }
+        .optimization-status {
+            margin-top: 10px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="spinner-container">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <div class="optimization-status">
+                Optimizing routes...<br>
+                <small class="text-muted">This may take a few minutes depending on the problem size</small>
+            </div>
+        </div>
+    </div>
+
     <div class="container mt-4">
         <h1>QAOA Route Optimizer</h1>
-        
+
         <div class="row">
             <div class="col-md-4">
                 <div class="card">
@@ -27,20 +58,21 @@
                         <form id="optimize-form">
                             <div class="mb-3">
                                 <label for="n_cities" class="form-label">Number of Cities</label>
-                                <input type="number" class="form-control" id="n_cities" name="n_cities" value="4" min="3" max="8">
+                                <input type="number" class="form-control" id="n_cities" name="n_cities" value="4" min="3" max="6">
+                                <small class="text-muted">Maximum 6 cities for reasonable computation time</small>
                             </div>
-                            
+
                             <div class="mb-3">
                                 <label for="n_vehicles" class="form-label">Number of Vehicles</label>
                                 <input type="number" class="form-control" id="n_vehicles" name="n_vehicles" value="1" min="1" max="3">
                             </div>
-                            
+
                             <div class="mb-3">
                                 <label for="location" class="form-label">Location</label>
                                 <input type="text" class="form-control" id="location" name="location" 
                                        value="San Francisco, California, USA">
                             </div>
-                            
+
                             <div class="mb-3">
                                 <label for="backend" class="form-label">Backend</label>
                                 <select class="form-control" id="backend" name="backend">
@@ -48,17 +80,17 @@
                                     <option value="pennylane">PennyLane</option>
                                 </select>
                             </div>
-                            
+
                             <div class="mb-3 form-check">
                                 <input type="checkbox" class="form-check-input" id="hybrid" name="hybrid">
                                 <label class="form-check-label" for="hybrid">Use Hybrid Optimization</label>
                             </div>
-                            
+
                             <button type="submit" class="btn btn-primary">Optimize Routes</button>
                         </form>
                     </div>
                 </div>
-                
+
                 <div class="card metrics-card" id="metrics-container" style="display: none;">
                     <div class="card-body">
                         <h5 class="card-title">Optimization Metrics</h5>
@@ -66,7 +98,7 @@
                     </div>
                 </div>
             </div>
-            
+
             <div class="col-md-8">
                 <div id="map-container">
                     <iframe id="map-frame" style="width: 100%; height: 100%; border: none;"></iframe>
@@ -78,12 +110,11 @@
     <script>
         document.getElementById('optimize-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            
+
             const form = e.target;
-            const submitBtn = form.querySelector('button[type="submit"]');
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = 'Optimizing...';
-            
+            const loadingOverlay = document.getElementById('loading-overlay');
+            loadingOverlay.style.display = 'flex';
+
             const formData = {
                 n_cities: parseInt(form.n_cities.value),
                 n_vehicles: parseInt(form.n_vehicles.value),
@@ -91,7 +122,7 @@
                 backend: form.backend.value,
                 hybrid: form.hybrid.checked
             };
-            
+
             try {
                 const response = await fetch('/optimize', {
                     method: 'POST',
@@ -100,18 +131,18 @@
                     },
                     body: JSON.stringify(formData)
                 });
-                
+
                 const data = await response.json();
-                
+
                 if (data.success) {
                     // Update map
                     document.getElementById('map-frame').src = data.map_path;
-                    
+
                     // Update metrics
                     const metricsContainer = document.getElementById('metrics-container');
                     const metricsContent = document.getElementById('metrics-content');
                     metricsContainer.style.display = 'block';
-                    
+
                     metricsContent.innerHTML = `
                         <p><strong>Total Time:</strong> ${data.metrics.total_time.toFixed(2)}s</p>
                         <p><strong>Solution Length:</strong> ${data.metrics.solution_length.toFixed(2)}m</p>
@@ -124,8 +155,7 @@
             } catch (error) {
                 alert('Error during optimization: ' + error.message);
             } finally {
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = 'Optimize Routes';
+                loadingOverlay.style.display = 'none';
             }
         });
     </script>

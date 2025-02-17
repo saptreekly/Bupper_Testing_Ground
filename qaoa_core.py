@@ -11,11 +11,12 @@ class QAOACircuit:
         self.n_qubits = min(n_qubits, 25)  # Hard limit at 25 qubits
         self.depth = depth
         try:
-            # Use default.qubit with numpy interface
+            # Use default.qubit with autograd interface for better gradient computation
             self.dev = qml.device('default.qubit', wires=self.n_qubits)
             self.circuit = qml.QNode(self._circuit_implementation, 
-                                    self.dev,
-                                    interface="numpy")
+                                   self.dev,
+                                   interface="autograd",
+                                   diff_method="parameter-shift")
             logger.info("Initialized quantum device with %d qubits", self.n_qubits)
         except Exception as e:
             logger.error("Failed to initialize quantum device: %s", str(e))
@@ -35,7 +36,6 @@ class QAOACircuit:
         logger.debug("Coefficient threshold: %.6f", threshold)
 
         for coeff, (i, j) in cost_terms:
-            # Strict validation of wire indices
             if not (0 <= i < self.n_qubits and 0 <= j < self.n_qubits):
                 logger.debug("Skipping term with out-of-range wires: (%d, %d)", i, j)
                 continue
@@ -44,7 +44,6 @@ class QAOACircuit:
                 logger.debug("Skipping self-interaction term: wire %d", i)
                 continue
 
-            # Ensure consistent ordering of wire pairs
             wire_pair = tuple(sorted([i, j]))
             if wire_pair in seen_wire_pairs:
                 logger.debug("Skipping duplicate wire pair: %s", wire_pair)
@@ -65,23 +64,28 @@ class QAOACircuit:
         return valid_terms
 
     def _circuit_implementation(self, params, cost_terms):
-        """QAOA circuit implementation using IsingXX gates."""
+        """QAOA circuit implementation using IsingXX gates with multiple layers."""
         try:
+            # Convert params to array for proper gradient computation
+            params = np.array(params, requires_grad=True)
+
             # Initial state preparation
             for i in range(self.n_qubits):
                 qml.Hadamard(wires=i)
 
-            # Single layer of QAOA
-            gamma = params[0]
-            beta = params[1]
+            # Implement QAOA layers
+            for layer in range(self.depth):
+                # Cost Hamiltonian with IsingXX interactions
+                gamma = params[2 * layer]
+                beta = params[2 * layer + 1]
 
-            # Cost Hamiltonian with IsingXX interactions
-            for coeff, (i, j) in cost_terms:  # cost_terms are already validated
-                qml.IsingXX(2 * gamma * coeff, wires=[i, j])  # Factor of 2 for XX convention
+                # Apply cost Hamiltonian
+                for coeff, (i, j) in cost_terms:
+                    qml.IsingXX(2 * gamma * coeff, wires=[i, j])
 
-            # Mixer Hamiltonian (kept as RX gates)
-            for i in range(self.n_qubits):
-                qml.RX(2 * beta, wires=i)
+                # Apply mixer Hamiltonian
+                for i in range(self.n_qubits):
+                    qml.RX(2 * beta, wires=i)
 
             # Measure in computational basis
             return [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
@@ -90,33 +94,33 @@ class QAOACircuit:
             logger.error("Error in circuit implementation: %s", str(e))
             raise
 
-    def optimize(self, cost_terms: List[Tuple], steps: int = 10):
-        """Basic QAOA optimization with adjusted parameters for XX gates."""
+    def optimize(self, cost_terms: List[Tuple], steps: int = 100):
+        """Enhanced QAOA optimization with better parameter initialization."""
         try:
-            # Validate cost terms once before optimization
             valid_terms = self._validate_cost_terms(cost_terms)
             if not valid_terms:
                 raise ValueError("No valid cost terms for optimization")
 
-            # Initialize parameters (scaled for XX gates)
-            params = 0.01 * np.random.randn(2)
-            logger.info("Initial parameters: gamma=%.6f, beta=%.6f", params[0], params[1])
+            # Initialize parameters with proper scaling
+            params = np.random.uniform(low=-np.pi/4, high=np.pi/4, size=2 * self.depth)
+            params = np.array(params, requires_grad=True)
+            logger.info("Initial parameters: %s", str(params))
 
-            opt = qml.GradientDescentOptimizer(stepsize=0.1)
+            # Use Adam optimizer for better convergence
+            opt = qml.AdamOptimizer(stepsize=0.1)
             costs = []
 
             def cost_function(p):
-                """Basic cost function."""
+                """Enhanced cost function with proper scaling."""
                 try:
-                    measurements = np.array(self.circuit(p, valid_terms))
+                    measurements = self.circuit(p, valid_terms)
                     cost = 0.0
                     for coeff, (i, j) in valid_terms:
                         term_cost = coeff * measurements[i] * measurements[j]
                         cost += term_cost
                         logger.debug("Term (%d,%d) contribution: %.6f", i, j, term_cost)
 
-                    # Scale cost for numerical stability
-                    final_cost = 0.1 * float(cost)
+                    final_cost = float(cost)
                     logger.debug("Final cost: %.6f", final_cost)
                     return final_cost
 
@@ -124,15 +128,30 @@ class QAOACircuit:
                     logger.error("Error in cost function: %s", str(e))
                     raise
 
-            # Optimization loop
+            # Optimization loop with early stopping
+            best_cost = float('inf')
+            patience = 10
+            no_improvement = 0
+
             for step in range(steps):
                 try:
+                    # Explicitly compute gradients and update parameters
                     params = opt.step(cost_function, params)
                     current_cost = cost_function(params)
                     costs.append(float(current_cost))
 
-                    logger.info("Step %d: Cost = %.6f, Params = [%.4f, %.4f]", 
-                               step, current_cost, params[0], params[1])
+                    logger.info("Step %d: Cost = %.6f, Params = %s", 
+                              step, current_cost, str(params))
+
+                    # Early stopping logic
+                    if current_cost < best_cost - 1e-6:  # Small threshold for numerical stability
+                        best_cost = current_cost
+                        no_improvement = 0
+                    else:
+                        no_improvement += 1
+                        if no_improvement >= patience:
+                            logger.info("Early stopping triggered after %d steps", step)
+                            break
 
                 except Exception as e:
                     logger.error("Error in optimization step %d: %s", step, str(e))

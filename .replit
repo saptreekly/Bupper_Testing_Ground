@@ -45,7 +45,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python test_qaoa.py"
+args = "python example.py"
 
 [deployment]
 run = ["sh", "-c", "python example.py"]

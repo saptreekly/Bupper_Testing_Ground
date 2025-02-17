@@ -6,6 +6,7 @@ from typing import List, Tuple, Dict, Any
 import logging
 import time
 from shapely.geometry import box
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -18,121 +19,152 @@ class StreetNetwork:
             logger.info(f"Fetching street network for {place_name}")
             start_time = time.time()
 
-            # Configure osmnx
-            ox.config(use_cache=True, log_console=True)
+            # Configure basic osmnx settings
+            ox.settings.log_console = True
+            ox.settings.use_cache = True
+            ox.settings.timeout = 180
 
-            # Set up bounding box for San Francisco to limit the area
-            if "San Francisco" in place_name:
-                north, south = 37.8120, 37.7067
-                east, west = -122.3555, -122.5185
-                logger.info("Using San Francisco bounding box to limit network size")
+            # Try different methods to fetch the network
+            try:
+                # First attempt: Try using a specific address in San Francisco
+                if "San Francisco" in place_name:
+                    address = "Union Square, San Francisco, California, USA"
+                    logger.info(f"Attempting to fetch network using address: {address}")
+                    self.G = ox.graph_from_address(address, dist=1000, network_type='drive')
+                    logger.info("Successfully fetched network using address")
+                else:
+                    # For other locations, try place name directly
+                    logger.info(f"Attempting to fetch network using place name: {place_name}")
+                    self.G = ox.graph_from_place(place_name, network_type='drive')
+                    logger.info("Successfully fetched network using place name")
+            except Exception as e:
+                logger.warning(f"Initial fetch attempt failed: {str(e)}")
                 try:
-                    self.G = ox.graph_from_bbox(north, south, east, west,
-                                          network_type='drive', simplify=True)
+                    # Final fallback: Use a bounding box for a small area
+                    logger.info("Falling back to bounding box method")
+                    # For San Francisco downtown area
+                    center_lat, center_lon = 37.7749, -122.4194
+                    dist = 1000  # meters
+                    north, south, east, west = ox.utils_geo.bbox_from_point((center_lat, center_lon), dist=dist)
+                    logger.info(f"Using bounding box: N={north}, S={south}, E={east}, W={west}")
+
+                    # Use positional arguments in the correct order
+                    self.G = ox.graph_from_bbox(north, south, east, west, network_type='drive')
+                    logger.info("Successfully fetched network using bounding box")
                 except Exception as bbox_error:
-                    logger.error(f"Failed to fetch with bounding box: {str(bbox_error)}")
-                    logger.info("Falling back to place name query")
-                    self.G = ox.graph_from_place(place_name,
-                                            network_type='drive', simplify=True)
-            else:
-                logger.info("Fetching network by place name")
-                self.G = ox.graph_from_place(place_name,
-                                        network_type='drive', simplify=True)
+                    logger.error(f"All fetch attempts failed. Last error: {str(bbox_error)}")
+                    raise RuntimeError("Could not fetch street network using any method")
 
-            logger.info(f"Network fetched in {time.time() - start_time:.1f}s")
+            logger.info(f"Initial network fetched in {time.time() - start_time:.1f}s")
+            logger.info(f"Initial network size: {len(self.G.nodes)} nodes, {len(self.G.edges)} edges")
 
-            # Convert to non-directional graph using NetworkX's method
-            logger.info("Converting to undirected graph")
+            # Simplify graph
+            self.G = ox.simplify_graph(self.G)
+            logger.info(f"Simplified network size: {len(self.G.nodes)} nodes, {len(self.G.edges)} edges")
+
+            # Convert to non-directional graph for simpler path finding
             self.G = self.G.to_undirected()
 
             # Project the graph to use meters for distance calculations
-            logger.info("Projecting graph to metric coordinates")
             self.G = ox.project_graph(self.G)
 
             # Get node positions
-            logger.info("Extracting node positions")
             self.node_positions = ox.graph_to_gdfs(self.G, edges=False)
 
-            logger.info(f"Successfully loaded network with {len(self.G.nodes)} nodes and {len(self.G.edges)} edges")
-            logger.info(f"Total initialization time: {time.time() - start_time:.1f}s")
+            logger.info(f"Network initialization completed in {time.time() - start_time:.1f}s")
+
         except Exception as e:
             logger.error(f"Error initializing street network: {str(e)}")
             raise RuntimeError(f"Failed to initialize street network: {str(e)}")
 
-    def get_random_nodes(self, n: int, min_distance: float = 500) -> List[int]:
+    def get_random_nodes(self, n: int, min_distance: float = 200) -> List[int]:
         """Get n random nodes that are at least min_distance meters apart."""
         try:
             start_time = time.time()
             logger.info(f"Selecting {n} random nodes with minimum distance of {min_distance}m")
 
-            all_nodes = list(self.G.nodes())
-            selected_nodes = []
+            # Get center node for depot
+            center_point = self.node_positions.unary_union.centroid
+            depot_node = ox.nearest_nodes(self.G, center_point.x, center_point.y)
+            selected_nodes = [depot_node]
+            logger.info(f"Selected depot node: {depot_node}")
+
+            # Get connected component containing depot
+            connected_nodes = list(nx.node_connected_component(self.G, depot_node))
+            logger.info(f"Found {len(connected_nodes)} nodes in connected component")
+
             attempts = 0
             max_attempts = 1000
+            while len(selected_nodes) < n and attempts < max_attempts:
+                node = random.choice(connected_nodes)
+                valid = True
 
-            # Always include a node near the center for depot
-            center_point = self.node_positions.unary_union.centroid
-            depot_node = ox.distance.nearest_nodes(self.G, center_point.x, center_point.y)
-            selected_nodes.append(depot_node)
-            logger.info(f"Selected depot node at ({center_point.x:.4f}, {center_point.y:.4f})")
-
-            # Gradually reduce min_distance if we can't find enough nodes
-            while len(selected_nodes) < n and min_distance > 100:
-                for _ in range(max_attempts):
-                    if len(selected_nodes) >= n:
-                        break
-
-                    node = np.random.choice(all_nodes)
-                    valid = True
-
-                    for selected in selected_nodes:
-                        try:
-                            distance = nx.shortest_path_length(self.G, node, selected, weight='length')
-                            if distance < min_distance:
-                                valid = False
-                                break
-                        except nx.NetworkXNoPath:
+                for selected in selected_nodes:
+                    try:
+                        distance = nx.shortest_path_length(self.G, node, selected, weight='length')
+                        if distance < min_distance:
                             valid = False
                             break
+                    except nx.NetworkXNoPath:
+                        valid = False
+                        break
 
-                    if valid:
-                        selected_nodes.append(node)
-                        logger.debug(f"Selected node {len(selected_nodes)}/{n}")
+                if valid:
+                    selected_nodes.append(node)
+                    logger.debug(f"Selected node {len(selected_nodes)}/{n}")
 
-                min_distance *= 0.8  # Reduce min_distance by 20% if we can't find enough nodes
+                attempts += 1
+                if attempts % 100 == 0:
+                    min_distance *= 0.8
+                    logger.info(f"Reducing minimum distance to {min_distance:.1f}m")
 
             if len(selected_nodes) < n:
-                logger.warning(f"Could only find {len(selected_nodes)} nodes meeting distance criteria")
-                # Fill remaining positions with closest valid nodes
-                remaining = n - len(selected_nodes)
-                for _ in range(remaining):
-                    for node in all_nodes:
+                logger.warning(f"Could only find {len(selected_nodes)} suitable nodes")
+                while len(selected_nodes) < n:
+                    for node in connected_nodes:
                         if node not in selected_nodes:
                             selected_nodes.append(node)
                             break
 
             logger.info(f"Node selection completed in {time.time() - start_time:.1f}s")
-            return selected_nodes[:n]  # Ensure we return exactly n nodes
+            return selected_nodes[:n]
+
         except Exception as e:
             logger.error(f"Error selecting random nodes: {str(e)}")
             raise
 
-    def get_shortest_path(self, start_node: int, end_node: int) -> Tuple[float, List[Tuple[float, float]]]:
-        """Get shortest path and distance between two nodes."""
+    def get_distance_matrix(self, nodes: List[int]) -> np.ndarray:
+        """Create distance matrix for the selected nodes."""
         try:
-            path = nx.shortest_path(self.G, start_node, end_node, weight='length')
-            distance = nx.shortest_path_length(self.G, start_node, end_node, weight='length')
+            start_time = time.time()
+            logger.info(f"Creating distance matrix for {len(nodes)} nodes")
 
-            # Get coordinates for the path
-            path_coords = []
-            for node in path:
-                coords = (self.node_positions.loc[node, 'geometry'].y,
-                         self.node_positions.loc[node, 'geometry'].x)
-                path_coords.append(coords)
+            n = len(nodes)
+            distance_matrix = np.zeros((n, n))
+            paths_calculated = 0
+            total_paths = n * (n-1)
 
-            return distance, path_coords
+            for i in range(n):
+                for j in range(n):
+                    if i != j:
+                        try:
+                            distance_matrix[i,j] = nx.shortest_path_length(
+                                self.G, nodes[i], nodes[j], weight='length')
+                            paths_calculated += 1
+                        except nx.NetworkXNoPath:
+                            # Use great circle distance as fallback
+                            coord1 = (self.node_positions.loc[nodes[i], 'geometry'].y,
+                                    self.node_positions.loc[nodes[i], 'geometry'].x)
+                            coord2 = (self.node_positions.loc[nodes[j], 'geometry'].y,
+                                    self.node_positions.loc[nodes[j], 'geometry'].x)
+                            distance_matrix[i,j] = ox.distance.great_circle_vec(coord1[0], coord1[1],
+                                                                             coord2[0], coord2[1])
+                            logger.warning(f"No path between nodes {nodes[i]} and {nodes[j]}, using great circle distance")
+
+            logger.info(f"Distance matrix created in {time.time() - start_time:.1f}s")
+            return distance_matrix
         except Exception as e:
-            logger.error(f"Error calculating shortest path: {str(e)}")
+            logger.error(f"Error creating distance matrix: {str(e)}")
             raise
 
     def create_folium_map(self, routes: List[List[int]], save_path: str = "street_map.html"):
@@ -150,9 +182,6 @@ class StreetNetwork:
             # Create a color for each route
             colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 'darkblue', 'darkgreen']
 
-            total_paths = sum(len(route)-1 for route in routes)
-            paths_plotted = 0
-
             # Plot each route
             for route_idx, route in enumerate(routes):
                 color = colors[route_idx % len(colors)]
@@ -164,7 +193,13 @@ class StreetNetwork:
                     end = route[i+1]
 
                     try:
-                        _, path_coords = self.get_shortest_path(start, end)
+                        path = nx.shortest_path(self.G, start, end, weight='length')
+                        path_coords = []
+
+                        for node in path:
+                            coords = (self.node_positions.loc[node, 'geometry'].y,
+                                    self.node_positions.loc[node, 'geometry'].x)
+                            path_coords.append(coords)
 
                         # Create a line for the path
                         folium.PolyLine(
@@ -175,10 +210,8 @@ class StreetNetwork:
                         ).add_to(m)
 
                         # Add markers for start and end points
-                        start_coords = (self.node_positions.loc[start, 'geometry'].y,
-                                      self.node_positions.loc[start, 'geometry'].x)
-                        end_coords = (self.node_positions.loc[end, 'geometry'].y,
-                                    self.node_positions.loc[end, 'geometry'].x)
+                        start_coords = path_coords[0]
+                        end_coords = path_coords[-1]
 
                         # Special marker for depot (first node of first route)
                         if route_idx == 0 and i == 0:
@@ -202,9 +235,6 @@ class StreetNetwork:
                             fill=True
                         ).add_to(m)
 
-                        paths_plotted += 1
-                        logger.debug(f"Plotted path {paths_plotted}/{total_paths}")
-
                     except Exception as e:
                         logger.warning(f"Could not plot path in route {route_idx}: {str(e)}")
                         continue
@@ -215,40 +245,4 @@ class StreetNetwork:
 
         except Exception as e:
             logger.error(f"Error creating map visualization: {str(e)}")
-            raise
-
-    def get_distance_matrix(self, nodes: List[int]) -> np.ndarray:
-        """Create distance matrix for the selected nodes."""
-        try:
-            start_time = time.time()
-            logger.info(f"Creating distance matrix for {len(nodes)} nodes")
-
-            n = len(nodes)
-            distance_matrix = np.zeros((n, n))
-            paths_calculated = 0
-            total_paths = n * (n-1)
-
-            for i in range(n):
-                for j in range(n):
-                    if i != j:
-                        try:
-                            distance_matrix[i,j] = nx.shortest_path_length(
-                                self.G, nodes[i], nodes[j], weight='length')
-                            paths_calculated += 1
-                            if paths_calculated % 10 == 0:
-                                logger.debug(f"Calculated {paths_calculated}/{total_paths} paths")
-                        except nx.NetworkXNoPath:
-                            # Use great circle distance as fallback
-                            coord1 = (self.node_positions.loc[nodes[i], 'geometry'].y,
-                                    self.node_positions.loc[nodes[i], 'geometry'].x)
-                            coord2 = (self.node_positions.loc[nodes[j], 'geometry'].y,
-                                    self.node_positions.loc[nodes[j], 'geometry'].x)
-                            distance_matrix[i,j] = ox.distance.great_circle_vec(coord1[0], coord1[1],
-                                                                          coord2[0], coord2[1])
-                            logger.warning(f"No path between nodes {nodes[i]} and {nodes[j]}, using great circle distance")
-
-            logger.info(f"Distance matrix created in {time.time() - start_time:.1f}s")
-            return distance_matrix
-        except Exception as e:
-            logger.error(f"Error creating distance matrix: {str(e)}")
             raise

@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
-from typing import List, Tuple, Set, Optional
+from typing import List, Tuple, Set, Optional, Dict
 import logging
 from matplotlib.patches import Rectangle
 import matplotlib.colors as mcolors
@@ -162,3 +162,78 @@ class CircuitVisualizer:
         except Exception as e:
             logger.error(f"Error plotting circuit results: {str(e)}")
             raise
+
+    def plot_solution_comparison(self, coordinates: List[Tuple[int, int]], 
+                               quantum_route: List[int], classical_route: List[int],
+                               quantum_metrics: Dict, classical_metrics: Dict,
+                               save_path: str = "solution_comparison.png"):
+        """Plot quantum vs classical solution comparison."""
+        try:
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+
+            # Plot quantum solution
+            ax1.set_title('Quantum Solution\n'
+                         f'Distance: {quantum_metrics["distance"]:.2f}\n'
+                         f'Time: {quantum_metrics["time"]:.2f}s')
+            self._plot_route_on_axis(ax1, coordinates, [quantum_route])
+
+            # Plot classical solution
+            ax2.set_title('Classical Solution\n'
+                         f'Distance: {classical_metrics["distance"]:.2f}\n'
+                         f'Time: {classical_metrics["time"]:.2f}s')
+            self._plot_route_on_axis(ax2, coordinates, [classical_route])
+
+            # Add comparison metrics
+            plt.figtext(0.5, 0.02, 
+                       f'Approximation Ratio: {quantum_metrics["distance"]/classical_metrics["distance"]:.3f}\n'
+                       f'Quantum/Classical Time Ratio: {quantum_metrics["time"]/classical_metrics["time"]:.3f}',
+                       ha='center', fontsize=12, bbox=dict(facecolor='white', alpha=0.8))
+
+            plt.tight_layout()
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            logger.info(f"Comparison plot saved to {save_path}")
+
+        except Exception as e:
+            logger.error(f"Error plotting solution comparison: {str(e)}")
+            raise
+
+    def _plot_route_on_axis(self, ax, coordinates: List[Tuple[int, int]], 
+                           routes: List[List[int]]):
+        """Helper function to plot a route on a given axis."""
+        # Plot cities
+        x_coords = [coord[0] for coord in coordinates]
+        y_coords = [coord[1] for coord in coordinates]
+        ax.scatter(x_coords, y_coords, c='blue', s=200, zorder=5)
+
+        # Plot routes
+        for route_idx, route in enumerate(routes):
+            color = self.colors[route_idx % len(self.colors)]
+            for i in range(len(route)-1):
+                start = coordinates[route[i]]
+                end = coordinates[route[i+1]]
+                ax.plot([start[0], end[0]], [start[1], end[1]], 
+                       color=color, linestyle='-', linewidth=2,
+                       label=f'Route {route_idx}' if i == 0 else "")
+
+                # Add direction arrows
+                mid_x = (start[0] + end[0]) / 2
+                mid_y = (start[1] + end[1]) / 2
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+                ax.arrow(mid_x - dx*0.1, mid_y - dy*0.1,
+                        dx*0.2, dy*0.2,
+                        head_width=0.3, head_length=0.4,
+                        fc=color, ec=color,
+                        length_includes_head=True,
+                        zorder=6)
+
+        # Add city labels
+        for i, (x, y) in enumerate(coordinates):
+            label = 'Depot' if i == 0 else f'City {i}'
+            ax.annotate(label, (x, y), 
+                       xytext=(5, 5), textcoords='offset points',
+                       fontsize=10)
+
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect('equal')

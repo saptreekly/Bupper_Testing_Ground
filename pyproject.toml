@@ -11,4 +11,5 @@ dependencies = [
     "pennylane>=0.40.0",
     "pennylane-qiskit>=0.40.0",
     "qiskit>=1.2.4",
+    "trafilatura>=2.0.0",
 ]

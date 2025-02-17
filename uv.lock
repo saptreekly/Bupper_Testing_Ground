@@ -1060,6 +1060,15 @@ wheels = [
 ]
 
 [[package]]
+name = "polyline"
+version = "2.0.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1d/2f/e6a437b785d951867882b9fba52a70b81fe8af778bbb4d96b6fb69630f72/polyline-2.0.2.tar.gz", hash = "sha256:10541e759c5fd51f746ee304e9af94744089a4055b6257b293b3afd1df64e369", size = 6400 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d7/4f/fbf07370cbf98af0098de83a26625d29aaa0bf73ef7123b561459729f3e6/polyline-2.0.2-py3-none-any.whl", hash = "sha256:389655c893bdabf2863c6aaa49490cf83dcdcec86ae715f67044ee98be57bef5", size = 5970 },
+]
+
+[[package]]
 name = "psutil"
 version = "7.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1474,11 +1483,13 @@ dependencies = [
     { name = "pennylane" },
     { name = "pennylane-lightning" },
     { name = "pennylane-qiskit" },
+    { name = "polyline" },
     { name = "psutil" },
     { name = "qiskit" },
     { name = "qiskit-aer" },
     { name = "qiskit-algorithms" },
     { name = "qiskit-optimization" },
+    { name = "requests" },
     { name = "scipy" },
     { name = "shapely" },
     { name = "trafilatura" },
@@ -1499,11 +1510,13 @@ requires-dist = [
     { name = "pennylane", specifier = ">=0.40.0" },
     { name = "pennylane-lightning", specifier = ">=0.40.0" },
     { name = "pennylane-qiskit", specifier = ">=0.40.0" },
+    { name = "polyline", specifier = ">=2.0.2" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "qiskit", specifier = ">=1.2.4" },
     { name = "qiskit-aer", specifier = ">=0.16.1" },
     { name = "qiskit-algorithms", specifier = ">=0.3.1" },
     { name = "qiskit-optimization", specifier = ">=0.6.1" },
+    { name = "requests", specifier = ">=2.32.3" },
     { name = "scipy", specifier = ">=1.15.1" },
     { name = "shapely", specifier = ">=2.0.7" },
     { name = "trafilatura", specifier = ">=2.0.0" },

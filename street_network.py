@@ -11,11 +11,13 @@ import math
 import matplotlib.pyplot as plt
 import traceback
 import os  # Added missing import
+import requests
+import polyline
 
 logger = logging.getLogger(__name__)
 
 class StreetNetwork:
-    """Handle real street network data from OpenStreetMap."""
+    """Handle real street network data and routing using OSRM."""
 
     def __init__(self, place_name: str = "San Francisco, California, USA"):
         """Initialize street network for a given location."""
@@ -25,23 +27,19 @@ class StreetNetwork:
 
             # Try different methods to fetch the network
             try:
-                # First attempt: Try using a specific address in San Francisco
                 if "San Francisco" in place_name:
                     address = "Union Square, San Francisco, California, USA"
                     logger.info(f"Attempting to fetch network using address: {address}")
                     self.G = ox.graph_from_address(address, dist=1000, network_type='drive')
                     logger.info("Successfully fetched network using address")
                 else:
-                    # For other locations, try place name directly
                     logger.info(f"Attempting to fetch network using place name: {place_name}")
                     self.G = ox.graph_from_place(place_name, network_type='drive')
                     logger.info("Successfully fetched network using place name")
             except Exception as e:
                 logger.warning(f"Initial fetch attempt failed: {str(e)}")
                 try:
-                    # Final fallback: Use a bounding box for a small area
                     logger.info("Falling back to bounding box method")
-                    # For San Francisco downtown area
                     center_lat, center_lon = 37.7749, -122.4194
                     dist = 1000  # meters
                     north, south, east, west = ox.utils_geo.bbox_from_point((center_lat, center_lon), dist=dist)
@@ -53,19 +51,14 @@ class StreetNetwork:
                     logger.error(f"All fetch attempts failed. Last error: {str(bbox_error)}")
                     raise RuntimeError("Could not fetch street network using any method")
 
-            # Convert to non-directional graph
-            self.G = self.G.to_undirected()
-            logger.info("Converted to undirected graph")
-
-            # Project the graph to use meters for distance calculations
-            self.G = ox.project_graph(self.G)
-            logger.info("Projected graph to use meters for distance calculations")
-
             # Get node positions and convert to lat/long
             self.node_positions = ox.graph_to_gdfs(self.G, edges=False)
-            # Convert back to lat/long coordinates (EPSG:4326)
             self.node_positions = self.node_positions.to_crs(epsg=4326)
             logger.info("Retrieved and converted node positions to lat/long format")
+
+            # OSRM server URL (using public demo server - replace with your own server in production)
+            self.osrm_url = "http://router.project-osrm.org/route/v1/driving"
+            logger.info("OSRM routing service initialized")
 
             logger.info(f"Network initialization completed in {time.time() - start_time:.1f}s")
 
@@ -227,21 +220,55 @@ class StreetNetwork:
             logger.error(f"Error creating distance matrix: {str(e)}")
             raise
 
+    def get_osrm_route(self, start_coord: Tuple[float, float], end_coord: Tuple[float, float]) -> List[Tuple[float, float]]:
+        """Get route coordinates between two points using OSRM."""
+        try:
+            # Format coordinates for OSRM (note: OSRM expects lon,lat order)
+            coords_str = f"{start_coord[1]},{start_coord[0]};{end_coord[1]},{end_coord[0]}"
+            url = f"{self.osrm_url}/{coords_str}?overview=full&geometries=polyline"
+
+            response = requests.get(url)
+            if response.status_code != 200:
+                raise RuntimeError(f"OSRM request failed with status {response.status_code}")
+
+            data = response.json()
+            if "routes" not in data or not data["routes"]:
+                raise RuntimeError("No route found in OSRM response")
+
+            # Decode the polyline to get route coordinates
+            route_coords = polyline.decode(data["routes"][0]["geometry"])
+            # Convert coordinates from lon,lat to lat,lon
+            route_coords = [(lat, lon) for lon, lat in route_coords]
+
+            return route_coords
+
+        except Exception as e:
+            logger.error(f"Error getting OSRM route: {str(e)}")
+            raise
+
     def create_folium_map(self, routes: List[List[int]], save_path: str = "street_map.html"):
         """Create an interactive map visualization of the routes."""
         try:
             start_time = time.time()
             logger.info(f"Creating interactive map visualization for {len(routes)} routes")
 
-            # Log graph information
-            logger.info(f"Graph has {len(self.G.nodes)} nodes and {len(self.G.edges)} edges")
+            # Validate graph and routes
+            if not self.G or not routes:
+                logger.error("Invalid graph or empty routes")
+                raise ValueError("Cannot create map: invalid graph or empty routes")
 
             # Get center point of the network
-            center_point = self.node_positions.unary_union.centroid
-            logger.info(f"Map center point: ({center_point.y}, {center_point.x})")
+            try:
+                center_point = self.node_positions.unary_union.centroid
+                logger.info(f"Map center point: ({center_point.y}, {center_point.x})")
+            except Exception as e:
+                logger.error(f"Error getting center point: {str(e)}")
+                first_node = list(self.G.nodes())[0]
+                center_point = self.node_positions.loc[first_node, 'geometry']
+                logger.info(f"Using fallback center point from first node")
 
-            # Create the base map with a light theme for better route visibility
-            m = folium.Map(location=[center_point.y, center_point.x], 
+            # Create the base map
+            m = folium.Map(location=[center_point.y, center_point.x],
                           zoom_start=13,
                           tiles='cartodbpositron')
 
@@ -255,17 +282,15 @@ class StreetNetwork:
 
                 # Plot path between each consecutive pair of nodes
                 for i in range(len(route)-1):
-                    start = route[i]
-                    end = route[i+1]
-
                     try:
-                        # Get shortest path between nodes
-                        path = nx.shortest_path(self.G, start, end, weight='length')
-                        path_coords = self.get_node_coordinates(path)
-                        logger.info(f"Path from node {start} to {end} has {len(path_coords)} coordinates")
-                        logger.info(f"Path coordinates: {path_coords}")
+                        # Get coordinates for start and end nodes
+                        start_coords = self.get_node_coordinates([route[i]])[0]
+                        end_coords = self.get_node_coordinates([route[i+1]])[0]
 
-                        # Create a more visible line for the path with outline
+                        # Get route using OSRM
+                        path_coords = self.get_osrm_route(start_coords, end_coords)
+                        logger.info(f"Got OSRM route with {len(path_coords)} points")
+
                         # Add white outline for contrast
                         outline = folium.PolyLine(
                             locations=path_coords,
@@ -281,52 +306,35 @@ class StreetNetwork:
                             weight=6,
                             color=color,
                             opacity=1.0,
-                            popup=f'Route {route_idx+1}: {start} → {end}'
+                            popup=f'Route {route_idx+1}: Node {route[i]} → {route[i+1]}'
                         )
                         line.add_to(m)
-                        logger.info(f"Added polyline for path {start} → {end}")
 
-                        # Add markers for start and end points
+                        # Add markers
                         if route_idx == 0 and i == 0:
                             # Depot marker
-                            marker = folium.Marker(
+                            folium.Marker(
                                 path_coords[0],
                                 popup='Depot',
                                 icon=folium.Icon(color='red', icon='info-sign', prefix='fa')
-                            )
-                            marker.add_to(m)
-                            logger.info(f"Added depot marker at {path_coords[0]}")
+                            ).add_to(m)
                         else:
                             # Regular stop marker
-                            marker = folium.CircleMarker(
+                            folium.CircleMarker(
                                 path_coords[0],
                                 radius=8,
                                 color=color,
                                 fill=True,
                                 fill_opacity=0.7,
                                 popup=f'Stop {i} (Route {route_idx+1})'
-                            )
-                            marker.add_to(m)
-                            logger.info(f"Added stop marker at {path_coords[0]}")
-
-                        # Add end point marker
-                        end_marker = folium.CircleMarker(
-                            path_coords[-1],
-                            radius=8,
-                            color=color,
-                            fill=True,
-                            fill_opacity=0.7,
-                            popup=f'Stop {i+1} (Route {route_idx+1})'
-                        )
-                        end_marker.add_to(m)
-                        logger.info(f"Added end marker at {path_coords[-1]}")
+                            ).add_to(m)
 
                     except Exception as e:
-                        logger.error(f"Could not plot path in route {route_idx} between nodes {start}-{end}: {str(e)}")
-                        logger.error(f"Error details: {traceback.format_exc()}")
+                        logger.error(f"Error plotting route segment: {str(e)}")
+                        logger.error(traceback.format_exc())
                         continue
 
-            # Add a fixed-position legend with better styling
+            # Add legend
             legend_html = '''
                 <div style="position: fixed; 
                             bottom: 50px; right: 50px; 
@@ -346,18 +354,11 @@ class StreetNetwork:
 
             # Save the map
             m.save(save_path)
-            logger.info(f"Interactive map saved to {save_path} (time: {time.time() - start_time:.1f}s)")
-
-            # Verify the saved file
-            if os.path.exists(save_path):
-                file_size = os.path.getsize(save_path)
-                logger.info(f"Map file created successfully, size: {file_size} bytes")
-            else:
-                logger.error(f"Failed to create map file at {save_path}")
+            logger.info(f"Interactive map saved to {save_path}")
 
         except Exception as e:
             logger.error(f"Error creating map visualization: {str(e)}")
-            logger.error(f"Error details: {traceback.format_exc()}")
+            logger.error(traceback.format_exc())
             raise
 
     def create_static_map(self, routes: List[List[int]], save_path: str = "route_map.png"):

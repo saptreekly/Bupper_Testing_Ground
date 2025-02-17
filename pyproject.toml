@@ -25,4 +25,6 @@ dependencies = [
     "flask-wtf>=1.2.2",
     "oauthlib>=3.2.2",
     "psutil>=7.0.0",
+    "polyline>=2.0.2",
+    "requests>=2.32.3",
 ]

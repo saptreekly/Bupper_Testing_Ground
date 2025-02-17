@@ -8,28 +8,10 @@ from qaoa_core import QAOACircuit
 logger = logging.getLogger(__name__)
 
 class HybridOptimizer:
-    """Hybrid quantum-classical optimizer for QAOA.
-
-    This class implements a three-phase optimization strategy:
-    1. Classical pre-optimization to find good initial parameters
-    2. Quantum optimization using either Qiskit or PennyLane
-    3. Classical post-optimization for refinement
-
-    Attributes:
-        n_qubits (int): Number of qubits in the quantum circuit
-        depth (int): Number of QAOA layers
-        backend (str): Quantum backend to use ('qiskit' or 'pennylane')
-        quantum_circuit: The quantum circuit implementation
-    """
+    """Hybrid quantum-classical optimizer for QAOA with improved performance."""
 
     def __init__(self, n_qubits: int, depth: int = 1, backend: str = 'qiskit'):
-        """Initialize hybrid optimizer with specified quantum backend.
-
-        Args:
-            n_qubits: Number of qubits for the quantum circuit
-            depth: Number of QAOA layers (default: 1)
-            backend: Quantum backend to use (default: 'qiskit')
-        """
+        """Initialize hybrid optimizer with specified quantum backend."""
         self.n_qubits = n_qubits
         self.depth = depth
         self.backend = backend
@@ -44,17 +26,7 @@ class HybridOptimizer:
         logger.debug(f"Configuration: {n_qubits} qubits, depth {depth}")
 
     def _classical_pre_optimization(self, cost_terms: List[Tuple]) -> np.ndarray:
-        """Use classical optimization to find good initial parameters.
-
-        Performs multiple starts of classical optimization to find good initial
-        parameters for the quantum optimization phase.
-
-        Args:
-            cost_terms: List of (coefficient, (i, j)) tuples representing the cost function
-
-        Returns:
-            np.ndarray: Optimized initial parameters for quantum circuit
-        """
+        """Use classical optimization to find good initial parameters."""
         try:
             logger.info("Starting classical pre-optimization phase")
 
@@ -68,22 +40,27 @@ class HybridOptimizer:
                     cost += coeff * zi * zj
                 return float(cost)
 
-            # Multiple starts for better initial point
+            # Multiple starts with improved parameter ranges
             best_cost = float('inf')
             best_params = None
             n_starts = 5
 
             for start in range(n_starts):
-                initial_guess = np.random.uniform(-np.pi/4, np.pi/4, 2 * self.depth)
+                # Initialize with smaller parameter range for better convergence
+                initial_guess = np.random.uniform(-np.pi/8, np.pi/8, 2 * self.depth)
                 logger.debug(f"Start {start + 1}/{n_starts}: Initial parameters: {initial_guess}")
 
-                result = minimize(classical_cost, initial_guess, method='COBYLA',
-                               options={'maxiter': 25})
+                result = minimize(classical_cost, initial_guess, 
+                               method='COBYLA',
+                               options={'maxiter': 25, 'rhobeg': 0.1})
 
                 if result.fun < best_cost:
                     best_cost = result.fun
                     best_params = result.x
                     logger.debug(f"New best classical solution: cost = {best_cost:.6f}")
+
+            if best_params is None:
+                raise ValueError("Classical pre-optimization failed to find valid parameters")
 
             logger.info(f"Classical pre-optimization complete: cost = {best_cost:.6f}")
             return best_params
@@ -93,20 +70,7 @@ class HybridOptimizer:
             raise
 
     def optimize(self, cost_terms: List[Tuple], steps: int = 100) -> Tuple[np.ndarray, List[float]]:
-        """Run hybrid optimization process.
-
-        Executes a three-phase optimization:
-        1. Classical pre-optimization
-        2. Quantum optimization with adaptive steps
-        3. Classical refinement
-
-        Args:
-            cost_terms: List of (coefficient, (i, j)) tuples for the cost function
-            steps: Total number of optimization steps (default: 100)
-
-        Returns:
-            Tuple[np.ndarray, List[float]]: Final parameters and cost history
-        """
+        """Run hybrid optimization process with adaptive phase lengths."""
         try:
             # Phase 1: Classical pre-optimization
             initial_params = self._classical_pre_optimization(cost_terms)
@@ -119,7 +83,8 @@ class HybridOptimizer:
             logger.info(f"Starting quantum optimization phase: {quantum_steps} steps")
 
             final_params, costs = self.quantum_circuit.optimize(cost_terms, steps=quantum_steps)
-            logger.info(f"Quantum optimization complete: cost = {costs[-1]:.6f}")
+            current_cost = costs[-1]
+            logger.info(f"Quantum optimization complete: cost = {current_cost:.6f}")
 
             # Phase 3: Classical refinement
             def quantum_cost(params):
@@ -129,13 +94,18 @@ class HybridOptimizer:
                          for coeff, (i, j) in cost_terms)
 
             logger.info("Starting classical refinement phase")
-            result = minimize(quantum_cost, final_params, method='COBYLA',
-                           options={'maxiter': remaining_steps - quantum_steps})
+            result = minimize(quantum_cost, final_params, 
+                           method='COBYLA',
+                           options={'maxiter': remaining_steps - quantum_steps,
+                                  'rhobeg': 0.05})
 
             final_params = result.x
             costs.extend([result.fun] * (remaining_steps - quantum_steps))
 
+            improvement = (current_cost - result.fun) / abs(current_cost)
+            logger.info(f"Classical refinement improved cost by {improvement:.1%}")
             logger.info(f"Hybrid optimization complete: final cost = {result.fun:.6f}")
+
             return final_params, costs
 
         except Exception as e:
@@ -143,15 +113,7 @@ class HybridOptimizer:
             raise
 
     def get_expectation_values(self, params: np.ndarray, cost_terms: List[Tuple]) -> List[float]:
-        """Get expectation values using the quantum circuit.
-
-        Args:
-            params: Circuit parameters
-            cost_terms: List of (coefficient, (i, j)) tuples
-
-        Returns:
-            List[float]: Expectation values for each qubit
-        """
+        """Get expectation values using the quantum circuit."""
         try:
             return self.quantum_circuit.get_expectation_values(params, cost_terms)
         except Exception as e:

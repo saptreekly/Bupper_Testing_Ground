@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
-from typing import List, Tuple, Set, Optional, Dict
+from typing import List, Tuple, Set, Optional, Dict, Any
 import logging
 from matplotlib.patches import Rectangle
 import matplotlib.colors as mcolors
@@ -83,9 +83,11 @@ class CircuitVisualizer:
             for vehicle_idx, route in enumerate(routes):
                 color = self.colors[vehicle_idx % len(self.colors)]
 
-                # Get paths for this vehicle's route
-                vehicle_paths = route_paths[path_index:path_index + len(route)-1]
-                path_index += len(route)-1
+                # Get paths for this vehicle's route if available
+                vehicle_paths = []
+                if route_paths:
+                    vehicle_paths = route_paths[path_index:path_index + len(route)-1]
+                    path_index += len(route)-1
 
                 # Plot each path segment
                 for path in vehicle_paths:
@@ -98,8 +100,8 @@ class CircuitVisualizer:
 
                         if dx == 0 or dy == 0:  # Only draw grid-aligned segments
                             plt.plot([start[0], end[0]], [start[1], end[1]], 
-                                       color=color, linestyle='-', linewidth=3, zorder=4,
-                                       label=f'Vehicle {vehicle_idx}' if i == 0 else "")
+                                    color=color, linestyle='-', linewidth=3, zorder=4,
+                                    label=f'Vehicle {vehicle_idx}' if i == 0 else "")
 
                             # Add direction arrows
                             mid_x = (start[0] + end[0]) / 2
@@ -237,3 +239,284 @@ class CircuitVisualizer:
 
         ax.grid(True, alpha=0.3)
         ax.set_aspect('equal')
+
+    def plot_benchmark_results(self, metrics_list: List[Dict], save_path: str = "benchmark_results.png"):
+        """Plot and save comprehensive benchmark results."""
+        try:
+            fig = plt.figure(figsize=(15, 10))
+            gs = plt.GridSpec(2, 2)
+
+            # Plot 1: Optimization times comparison
+            ax1 = fig.add_subplot(gs[0, 0])
+            backends = sorted(set(m['backend'] for m in metrics_list))
+            problem_sizes = sorted(set(m['problem_size']['n_cities'] for m in metrics_list))
+
+            for backend in backends:
+                times = [next(m['optimization_time'] for m in metrics_list 
+                            if m['backend'] == backend and 
+                            m['problem_size']['n_cities'] == size)
+                        for size in problem_sizes]
+                ax1.plot(problem_sizes, times, 'o-', label=f'{backend}')
+
+            ax1.set_xlabel('Number of Cities')
+            ax1.set_ylabel('Optimization Time (s)')
+            ax1.set_title('Optimization Time vs Problem Size')
+            ax1.legend()
+            ax1.grid(True)
+
+            # Plot 2: Solution quality comparison
+            ax2 = fig.add_subplot(gs[0, 1])
+            for backend in backends:
+                gaps = [next(m['quantum_classical_gap'] for m in metrics_list 
+                           if m['backend'] == backend and 
+                           m['problem_size']['n_cities'] == size)
+                       for size in problem_sizes]
+                ax2.plot(problem_sizes, gaps, 'o-', label=f'{backend}')
+
+            ax2.set_xlabel('Number of Cities')
+            ax2.set_ylabel('Gap to Classical Solution')
+            ax2.set_title('Solution Quality vs Problem Size')
+            ax2.legend()
+            ax2.grid(True)
+
+            # Plot 3: Convergence history
+            ax3 = fig.add_subplot(gs[1, :])
+            for metrics in metrics_list:
+                if 'convergence_history' in metrics:
+                    history = metrics['convergence_history']
+                    label = f"{metrics['backend']} ({metrics['problem_size']['n_cities']} cities)"
+                    ax3.plot(history, label=label, alpha=0.7)
+
+            ax3.set_xlabel('Iteration')
+            ax3.set_ylabel('Cost')
+            ax3.set_title('Convergence History')
+            ax3.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax3.grid(True)
+
+            plt.tight_layout()
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            logger.info(f"Benchmark results plot saved to {save_path}")
+
+        except Exception as e:
+            logger.error(f"Error plotting benchmark results: {str(e)}")
+            raise
+
+    def plot_performance_metrics(self, metrics: Dict[str, Any], save_path: str = "performance_metrics.png"):
+        """Plot detailed performance metrics from a single run."""
+        try:
+            fig = plt.figure(figsize=(12, 8))
+            gs = plt.GridSpec(2, 2)
+
+            # Plot 1: Time breakdown
+            ax1 = fig.add_subplot(gs[0, 0])
+            time_metrics = {k: v for k, v in metrics.items() if 'time' in k and isinstance(v, (int, float))}
+            ax1.pie(time_metrics.values(), labels=time_metrics.keys(), autopct='%1.1f%%')
+            ax1.set_title('Execution Time Breakdown')
+
+            # Plot 2: Solution characteristics
+            ax2 = fig.add_subplot(gs[0, 1])
+            if 'solution_length' in metrics and 'classical_solution_time' in metrics:
+                values = [metrics['solution_length'], metrics.get('classical_solution_time', 0)]
+                labels = ['Quantum', 'Classical']
+                ax2.bar(labels, values)
+                ax2.set_title('Solution Quality Comparison')
+                ax2.set_ylabel('Route Length')
+
+            # Plot 3: Convergence analysis
+            ax3 = fig.add_subplot(gs[1, :])
+            if 'convergence_history' in metrics:
+                history = metrics['convergence_history']
+                ax3.plot(history, 'b-', label='Cost')
+                ax3.set_xlabel('Iteration')
+                ax3.set_ylabel('Cost')
+                ax3.set_title('Optimization Convergence')
+                ax3.grid(True)
+
+            plt.tight_layout()
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            logger.info(f"Performance metrics plot saved to {save_path}")
+
+        except Exception as e:
+            logger.error(f"Error plotting performance metrics: {str(e)}")
+            raise
+    
+    def plot_time_series_analysis(self, metrics_list: List[Dict], save_path: str = "time_series_analysis.png"):
+        """Plot detailed time series analysis of optimization runs."""
+        try:
+            fig = plt.figure(figsize=(15, 8))
+            gs = plt.GridSpec(2, 1, height_ratios=[2, 1])
+
+            # Plot 1: Convergence curves with confidence bands
+            ax1 = fig.add_subplot(gs[0])
+            backends = sorted(set(m['backend'] for m in metrics_list))
+            problem_sizes = sorted(set(m['problem_size']['n_cities'] for m in metrics_list))
+
+            for backend in backends:
+                # Collect all convergence histories for this backend
+                pure_histories = [m['convergence_history'] for m in metrics_list 
+                               if m['backend'] == backend and not m.get('hybrid', False)]
+                hybrid_histories = [m['convergence_history'] for m in metrics_list 
+                                 if m['backend'] == backend and m.get('hybrid', True)]
+
+                # Plot pure quantum convergence
+                if pure_histories:
+                    max_len = max(len(h) for h in pure_histories)
+                    normalized = np.array([np.interp(np.linspace(0, 1, max_len),
+                                                  np.linspace(0, 1, len(h)), h)
+                                        for h in pure_histories])
+                    mean_curve = np.mean(normalized, axis=0)
+                    std_curve = np.std(normalized, axis=0)
+
+                    x = range(max_len)
+                    ax1.plot(x, mean_curve, label=f'{backend} pure', linewidth=2)
+                    ax1.fill_between(x, mean_curve - std_curve, mean_curve + std_curve,
+                                  alpha=0.2)
+
+                # Plot hybrid convergence
+                if hybrid_histories:
+                    max_len = max(len(h) for h in hybrid_histories)
+                    normalized = np.array([np.interp(np.linspace(0, 1, max_len),
+                                                  np.linspace(0, 1, len(h)), h)
+                                        for h in hybrid_histories])
+                    mean_curve = np.mean(normalized, axis=0)
+                    std_curve = np.std(normalized, axis=0)
+
+                    x = range(max_len)
+                    ax1.plot(x, mean_curve, '--', label=f'{backend} hybrid', linewidth=2)
+                    ax1.fill_between(x, mean_curve - std_curve, mean_curve + std_curve,
+                                  alpha=0.2)
+
+            ax1.set_xlabel('Normalized Iteration')
+            ax1.set_ylabel('Cost')
+            ax1.set_title('Convergence Analysis with Uncertainty')
+            ax1.legend()
+            ax1.grid(True)
+
+            # Plot 2: Performance scaling
+            ax2 = fig.add_subplot(gs[1])
+            for backend in backends:
+                for is_hybrid in [False, True]:
+                    scaling_data = []
+                    for size in problem_sizes:
+                        metrics = [m for m in metrics_list 
+                                if m['backend'] == backend and 
+                                m['problem_size']['n_cities'] == size and
+                                m.get('hybrid', False) == is_hybrid]
+                        if metrics:
+                            mean_time = np.mean([m['total_time'] for m in metrics])
+                            scaling_data.append(mean_time)
+
+                    if scaling_data:
+                        label = f'{backend} {"hybrid" if is_hybrid else "pure"}'
+                        style = '--' if is_hybrid else '-'
+                        ax2.plot(problem_sizes[:len(scaling_data)], scaling_data, 
+                               f'o{style}', label=label)
+
+            ax2.set_xlabel('Number of Cities')
+            ax2.set_ylabel('Total Time (s)')
+            ax2.set_title('Performance Scaling')
+            ax2.legend()
+            ax2.grid(True)
+
+            plt.tight_layout()
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            logger.info(f"Time series analysis plot saved to {save_path}")
+
+        except Exception as e:
+            logger.error(f"Error plotting time series analysis: {str(e)}")
+            raise
+
+    def plot_cross_validation_metrics(self, metrics_list: List[Dict], save_path: str = "cross_validation_metrics.png"):
+        """Plot cross-validation metrics comparing hybrid and pure approaches."""
+        try:
+            fig = plt.figure(figsize=(15, 10))
+            gs = plt.GridSpec(2, 2)
+
+            # Plot 1: Solution quality distribution
+            ax1 = fig.add_subplot(gs[0, 0])
+            backends = sorted(set(m['backend'] for m in metrics_list))
+
+            data = []
+            labels = []
+            for backend in backends:
+                for is_hybrid in [False, True]:
+                    metrics = [m for m in metrics_list 
+                             if m['backend'] == backend and 
+                             m.get('hybrid', False) == is_hybrid]
+                    if metrics:
+                        gaps = [m['quantum_classical_gap'] for m in metrics]
+                        data.append(gaps)
+                        labels.append(f"{backend}\n{'hybrid' if is_hybrid else 'pure'}")
+
+            ax1.boxplot(data, labels=labels)
+            ax1.set_ylabel('Gap to Classical Solution')
+            ax1.set_title('Solution Quality Distribution')
+            plt.setp(ax1.get_xticklabels(), rotation=45)
+            ax1.grid(True)
+
+            # Plot 2: Time efficiency comparison
+            ax2 = fig.add_subplot(gs[0, 1])
+            for backend in backends:
+                pure_metrics = [m for m in metrics_list 
+                              if m['backend'] == backend and 
+                              not m.get('hybrid', False)]
+                hybrid_metrics = [m for m in metrics_list 
+                                if m['backend'] == backend and 
+                                m.get('hybrid', True)]
+
+                if pure_metrics and hybrid_metrics:
+                    sizes = sorted(set(m['problem_size']['n_cities'] for m in pure_metrics))
+                    pure_times = []
+                    hybrid_times = []
+
+                    for size in sizes:
+                        pure_time = np.mean([m['total_time'] for m in pure_metrics 
+                                          if m['problem_size']['n_cities'] == size])
+                        hybrid_time = np.mean([m['total_time'] for m in hybrid_metrics 
+                                            if m['problem_size']['n_cities'] == size])
+                        pure_times.append(pure_time)
+                        hybrid_times.append(hybrid_time)
+
+                    ax2.plot(sizes, [h/p for h, p in zip(hybrid_times, pure_times)],
+                            'o-', label=backend)
+
+            ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.5)
+            ax2.set_xlabel('Number of Cities')
+            ax2.set_ylabel('Hybrid/Pure Time Ratio')
+            ax2.set_title('Time Efficiency Comparison')
+            ax2.legend()
+            ax2.grid(True)
+
+            # Plot 3: Convergence stability
+            ax3 = fig.add_subplot(gs[1, :])
+            for backend in backends:
+                for is_hybrid in [False, True]:
+                    metrics = [m for m in metrics_list 
+                             if m['backend'] == backend and 
+                             m.get('hybrid', False) == is_hybrid]
+                    if metrics:
+                        variances = [m['cost_variance'] for m in metrics if 'cost_variance' in m]
+                        sizes = [m['problem_size']['n_cities'] for m in metrics if 'cost_variance' in m]
+
+                        if variances and sizes:
+                            style = '--' if is_hybrid else '-'
+                            label = f"{backend} {'hybrid' if is_hybrid else 'pure'}"
+                            ax3.plot(sizes, variances, f'o{style}', label=label)
+
+            ax3.set_xlabel('Number of Cities')
+            ax3.set_ylabel('Cost Variance')
+            ax3.set_title('Convergence Stability Analysis')
+            ax3.legend()
+            ax3.grid(True)
+
+            plt.tight_layout()
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            logger.info(f"Cross-validation metrics plot saved to {save_path}")
+
+        except Exception as e:
+            logger.error(f"Error plotting cross-validation metrics: {str(e)}")
+            raise

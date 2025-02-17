@@ -6,7 +6,7 @@ from circuit_visualization import CircuitVisualizer
 from utils import Utils
 import numpy as np
 import random
-from typing import List, Tuple, Set
+from typing import List, Tuple, Set, Dict, Any
 from heapq import heappush, heappop
 import argparse
 import sys
@@ -148,6 +148,121 @@ def parse_coordinates(coord_str: str) -> List[Tuple[int, int]]:
         logger.error(f"Failed to parse coordinates: {str(e)}")
         return []
 
+import time
+from typing import Dict, Any
+import numpy as np
+
+def benchmark_optimization(n_cities: int, n_vehicles: int, grid_size: int,
+                         backend: str, hybrid: bool = False) -> Dict[str, Any]:
+    """Benchmark optimization performance."""
+    metrics = {}
+    start_time = time.time()
+
+    try:
+        # Generate problem instance
+        coordinates = generate_grid_cities(n_cities, grid_size)
+        demands = generate_random_demands(n_cities)
+        qubo = QUBOFormulation(n_cities, n_vehicles, [float('inf')] * n_vehicles)
+        distance_matrix = qubo.create_distance_matrix(coordinates)
+
+        # Problem characteristics
+        metrics['problem_setup_time'] = time.time() - start_time
+        metrics['problem_size'] = {
+            'n_cities': n_cities,
+            'n_vehicles': n_vehicles,
+            'n_qubits': n_cities * n_cities * n_vehicles
+        }
+        logger.info(f"Problem size metrics: {metrics['problem_size']}")
+
+        # Measure QUBO formation
+        start_time = time.time()
+        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)  # Increased penalty
+        metrics['qubo_formation_time'] = time.time() - start_time
+        metrics['qubo_sparsity'] = np.count_nonzero(qubo_matrix) / (qubo_matrix.size)
+        logger.info(f"QUBO formation metrics - Time: {metrics['qubo_formation_time']:.3f}s, Sparsity: {metrics['qubo_sparsity']:.3f}")
+
+        # Generate cost terms with improved filtering
+        start_time = time.time()
+        n_qubits = n_cities * n_cities * n_vehicles
+        cost_terms = []
+        max_coeff = np.max(np.abs(qubo_matrix))
+        mean_coeff = np.mean(np.abs(qubo_matrix[np.nonzero(qubo_matrix)]))
+        threshold = mean_coeff * 0.01  # Adaptive threshold
+
+        for i in range(n_qubits):
+            for j in range(i + 1, n_qubits):
+                if abs(qubo_matrix[i, j]) > threshold:
+                    cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
+
+        metrics['cost_terms_generation_time'] = time.time() - start_time
+        metrics['n_cost_terms'] = len(cost_terms)
+        metrics['cost_terms_density'] = len(cost_terms) / (n_qubits * (n_qubits - 1) / 2)
+        logger.info(f"Generated {len(cost_terms)} cost terms with density {metrics['cost_terms_density']:.3f}")
+
+        # Initialize and run optimization
+        circuit_start = time.time()
+        if hybrid:
+            circuit = HybridOptimizer(n_qubits, depth=min(2, n_cities//2), backend=backend)
+            logger.info(f"Initialized hybrid optimizer with {backend} backend")
+        else:
+            if backend == 'qiskit':
+                circuit = QiskitQAOA(n_qubits, depth=min(2, n_cities//2))
+            else:
+                circuit = QAOACircuit(n_qubits, depth=min(2, n_cities//2))
+            logger.info(f"Initialized {backend} circuit with {n_qubits} qubits")
+
+        metrics['circuit_initialization_time'] = time.time() - circuit_start
+
+        # Optimization phase
+        optimization_start = time.time()
+        params, costs = circuit.optimize(cost_terms, steps=min(100, n_qubits * 5))
+        metrics['optimization_time'] = time.time() - optimization_start
+        logger.info(f"Optimization completed in {metrics['optimization_time']:.3f}s")
+
+        # Analyze convergence
+        if len(costs) > 1:
+            metrics['convergence_rate'] = (costs[0] - costs[-1]) / len(costs)
+            metrics['cost_variance'] = np.var(costs)
+            logger.info(f"Convergence rate: {metrics['convergence_rate']:.3f}, Variance: {metrics['cost_variance']:.3f}")
+
+        # Solution quality metrics
+        solution_start = time.time()
+        measurements = circuit.get_expectation_values(params, cost_terms)
+        binary_solution = [1 if x > 0 else 0 for x in measurements]
+        routes = qubo.decode_solution(binary_solution)
+
+        # Calculate detailed solution metrics
+        total_length = 0
+        max_route_length = 0
+        for route in routes:
+            route_length = 0
+            for i in range(len(route)-1):
+                route_length += distance_matrix[route[i], route[i+1]]
+            total_length += route_length
+            max_route_length = max(max_route_length, route_length)
+
+        metrics['solution_computation_time'] = time.time() - solution_start
+        metrics['total_time'] = time.time() - start_time
+        metrics['solution_length'] = total_length
+        metrics['max_route_length'] = max_route_length
+        metrics['n_routes'] = len(routes)
+        metrics['convergence_history'] = costs
+        metrics['final_cost'] = costs[-1]
+
+        # Classical comparison
+        classical_start = time.time()
+        _, classical_length = clarke_wright_savings(distance_matrix, demands, 
+                                                depot_index=0, capacity=float('inf'))
+        metrics['classical_solution_time'] = time.time() - classical_start
+        metrics['quantum_classical_gap'] = (total_length - classical_length) / classical_length
+
+        logger.info(f"Solution metrics - Length: {total_length:.2f}, Gap to classical: {metrics['quantum_classical_gap']:.1%}")
+        return metrics
+
+    except Exception as e:
+        logger.error(f"Error in benchmark optimization: {str(e)}", exc_info=True)
+        raise
+
 def main():
     try:
         parser = argparse.ArgumentParser(description='QAOA Vehicle Routing Optimizer')
@@ -162,7 +277,87 @@ def main():
                           help='Choose quantum backend (default: qiskit)')
         parser.add_argument('--hybrid', action='store_true',
                           help='Use hybrid quantum-classical optimization')
+        parser.add_argument('--benchmark', action='store_true',
+                          help='Run benchmarking suite')
         args = parser.parse_args()
+
+        if args.benchmark:
+            logger.info("\nRunning benchmarking suite...")
+            problem_sizes = [(3, 1), (4, 1), (5, 1)]  # (cities, vehicles)
+            backends = ['qiskit', 'pennylane']
+            all_metrics = []
+
+            visualizer = CircuitVisualizer()
+
+            for n_cities, n_vehicles in problem_sizes:
+                for backend in backends:
+                    for hybrid in [False, True]:
+                        logger.info(f"\nBenchmarking {n_cities} cities, {n_vehicles} vehicles "
+                                  f"with {backend} backend, hybrid={hybrid}")
+
+                        metrics = benchmark_optimization(n_cities, n_vehicles, args.grid_size,
+                                                      backend, hybrid)
+                        metrics['backend'] = backend
+                        metrics['hybrid'] = hybrid
+                        all_metrics.append(metrics)
+
+                        logger.info("Performance metrics:")
+                        for key, value in metrics.items():
+                            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                                logger.info(f"{key}: {value:.3f}")
+                            elif isinstance(value, dict):
+                                logger.info(f"{key}: {value}")
+                            else:
+                                logger.info(f"{key}: {value}")
+
+                        # Plot individual run metrics
+                        visualizer.plot_performance_metrics(
+                            metrics,
+                            save_path=f"performance_metrics_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities.png"
+                        )
+
+            # Plot comparative benchmark results
+            visualizer.plot_benchmark_results(all_metrics, save_path="benchmark_results.png")
+            visualizer.plot_time_series_analysis(all_metrics, save_path="time_series_analysis.png")
+            visualizer.plot_cross_validation_metrics(all_metrics, save_path="cross_validation_metrics.png")
+            logger.info("\nBenchmark visualizations have been saved.")
+
+            # Print summary statistics
+            logger.info("\nSummary Statistics:")
+            for backend in sorted(set(m['backend'] for m in all_metrics)):
+                backend_metrics = [m for m in all_metrics if m['backend'] == backend]
+                avg_gap = np.mean([m['quantum_classical_gap'] for m in backend_metrics])
+                avg_time = np.mean([m['optimization_time'] for m in backend_metrics])
+                logger.info(f"{backend.upper()}:")
+                logger.info(f"  Average gap to classical: {avg_gap:.1%}")
+                logger.info(f"  Average optimization time: {avg_time:.2f}s")
+
+                # Compare hybrid vs pure quantum metrics
+                if any(m.get('hybrid', False) for m in backend_metrics):
+                    hybrid_metrics = [m for m in backend_metrics if m.get('hybrid', False)]
+                    pure_metrics = [m for m in backend_metrics if not m.get('hybrid', False)]
+                    hybrid_improvement = 1 - np.mean([m['quantum_classical_gap'] for m in hybrid_metrics]) / \
+                                          np.mean([m['quantum_classical_gap'] for m in pure_metrics])
+                    hybrid_speedup = np.mean([m['total_time'] for m in pure_metrics]) / \
+                                   np.mean([m['total_time'] for m in hybrid_metrics])
+                    logger.info(f"  Hybrid improvement: {hybrid_improvement:.1%}")
+                    logger.info(f"  Hybrid speedup: {hybrid_speedup:.2f}x")
+
+            logger.info("\nCross-backend comparison:")
+            sizes = sorted(set(m['problem_size']['n_cities'] for m in all_metrics))
+            for size in sizes:
+                size_metrics = [m for m in all_metrics if m['problem_size']['n_cities'] == size]
+                logger.info(f"\nProblem size: {size} cities")
+                for backend in backends:
+                    backend_size_metrics = [m for m in size_metrics if m['backend'] == backend]
+                    if backend_size_metrics:
+                        avg_gap = np.mean([m['quantum_classical_gap'] for m in backend_size_metrics])
+                        avg_time = np.mean([m['total_time'] for m in backend_size_metrics])
+                        avg_variance = np.mean([m.get('cost_variance', 0) for m in backend_size_metrics])
+                        logger.info(f"  {backend}: gap={avg_gap:.1%}, time={avg_time:.2f}s, "
+                                     f"variance={avg_variance:.2e}")
+
+            return
 
         n_cities = args.cities
         grid_size = args.grid_size
@@ -305,11 +500,17 @@ def main():
             "time": cw_time
         }
 
-        # Compare solutions
+        # Compare solutions with improved logging
         logger.info("\nSolution comparison:")
         logger.info(f"Quantum solution length: {total_route_length:.2f} (time: {quantum_time:.2f}s)")
         logger.info(f"Clarke-Wright solution length: {cw_length:.2f} (time: {cw_time:.2f}s)")
         logger.info(f"Brute force optimal length: {optimal_length:.2f} (time: {brute_force_time:.2f}s)")
+
+        # Add relative performance metrics
+        quantum_gap = (total_route_length - optimal_length) / optimal_length
+        classical_gap = (cw_length - optimal_length) / optimal_length
+        logger.info(f"Quantum solution gap: {quantum_gap:.1%}")
+        logger.info(f"Classical solution gap: {classical_gap:.1%}")
 
         # Visualization
         visualizer = CircuitVisualizer()

@@ -1,25 +1,36 @@
 import numpy as np
-from qiskit import QuantumCircuit
+from qiskit import QuantumCircuit, transpile
 from qiskit_aer import Aer
 from qiskit.circuit import Parameter
 from qiskit.primitives import BackendEstimator
 from qiskit.quantum_info import SparsePauliOp
+from qiskit.compiler import transpile
+from concurrent.futures import ThreadPoolExecutor
 import logging
 
 logger = logging.getLogger(__name__)
 
 class QiskitQAOA:
-    """QAOA implementation using Qiskit."""
+    """QAOA implementation using Qiskit with performance optimizations."""
 
     def __init__(self, n_qubits: int, depth: int = 1):
         """Initialize QAOA circuit with Qiskit backend."""
-        self.n_qubits = min(n_qubits, 25)  # Hard limit at 25 qubits
+        self.n_qubits = min(n_qubits, 50)  # Hard limit at 50 qubits
         self.depth = depth
         try:
+            # Initialize parallel backends
             self.backend = Aer.get_backend('aer_simulator')
-            self.estimator = BackendEstimator(backend=self.backend)
+            self.backend.set_options(
+                precision='double',
+                max_parallel_threads=4,
+                max_parallel_experiments=4
+            )
+            self.estimator = BackendEstimator(
+                backend=self.backend,
+                run_options={"shots": 1024},
+                skip_transpilation=True  # We'll handle transpilation separately
+            )
             logger.info("Initialized Qiskit backend with %d qubits", self.n_qubits)
-            # Use name attribute instead of backend_name
             logger.debug("Using simulator backend: %s", self.backend.name)
         except Exception as e:
             logger.error("Failed to initialize Qiskit backend: %s", str(e))
@@ -33,14 +44,12 @@ class QiskitQAOA:
 
         valid_terms = []
         seen_pairs = set()
-        max_coeff = max(abs(coeff) for coeff, _ in cost_terms)
+        coeffs = [abs(coeff) for coeff, _ in cost_terms]
+        max_coeff = max(coeffs)
+        mean_coeff = sum(coeffs) / len(coeffs)
+        threshold = mean_coeff * 0.01  # Adaptive threshold
 
-        if max_coeff < 1e-10:
-            logger.warning("All coefficients are nearly zero")
-            return []
-
-        threshold = max_coeff * 1e-4  # Increased threshold for numerical stability
-        logger.debug(f"Validation threshold: {threshold:.2e}")
+        logger.debug(f"Validation thresholds - Max: {max_coeff:.2e}, Mean: {mean_coeff:.2e}")
 
         for coeff, (i, j) in cost_terms:
             if not (0 <= i < self.n_qubits and 0 <= j < self.n_qubits):
@@ -62,36 +71,40 @@ class QiskitQAOA:
         return valid_terms
 
     def _create_qaoa_circuit(self, params, cost_terms):
-        """Create QAOA circuit with given parameters."""
+        """Create optimized QAOA circuit with given parameters."""
         valid_terms = self._validate_cost_terms(cost_terms)
         if not valid_terms:
             raise ValueError("No valid cost terms for circuit construction")
 
         circuit = QuantumCircuit(self.n_qubits)
         circuit.h(range(self.n_qubits))
-        logger.debug("Initialized circuit in uniform superposition state")
 
         for p in range(self.depth):
             gamma = params[2 * p]
             beta = params[2 * p + 1]
 
-            # Cost operator with improved implementation
+            # Optimize cost operator implementation
             for coeff, (i, j) in valid_terms:
-                if i != j:  # Skip self-interactions
+                if i != j:
                     circuit.cx(i, j)
                     circuit.rz(2 * gamma * coeff, j)
                     circuit.cx(i, j)
 
-            # Mixer operator
-            for i in range(self.n_qubits):
-                circuit.rx(2 * beta, i)
+            # Optimize mixer operator
+            circuit.rx(2 * beta, range(self.n_qubits))
 
-            logger.debug(f"Completed QAOA layer {p + 1}/{self.depth}")
+        # Transpile circuit for optimization
+        optimized_circuit = transpile(
+            circuit,
+            self.backend,
+            optimization_level=3,
+            seed_transpiler=42
+        )
 
-        return circuit
+        return optimized_circuit
 
     def get_expectation_values(self, params, cost_terms):
-        """Get expectation values for all qubits."""
+        """Get expectation values using parallel execution."""
         try:
             valid_terms = self._validate_cost_terms(cost_terms)
             if not valid_terms:
@@ -100,12 +113,16 @@ class QiskitQAOA:
             circuit = self._create_qaoa_circuit(params, valid_terms)
             observables = []
 
-            for i in range(self.n_qubits):
+            # Prepare observables in parallel
+            def create_observable(i):
                 pauli_str = ['I'] * self.n_qubits
                 pauli_str[i] = 'Z'
-                obs = SparsePauliOp(''.join(pauli_str))
-                observables.append(obs)
+                return SparsePauliOp(''.join(pauli_str))
 
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                observables = list(executor.map(create_observable, range(self.n_qubits)))
+
+            # Run parallel estimation
             job = self.estimator.run([circuit] * self.n_qubits, observables)
             result = job.result()
 
@@ -119,17 +136,27 @@ class QiskitQAOA:
             raise
 
     def optimize(self, cost_terms, steps=100):
-        """Optimize the QAOA circuit parameters."""
+        """Optimize the QAOA circuit parameters with adaptive optimization."""
         try:
             valid_terms = self._validate_cost_terms(cost_terms)
             if not valid_terms:
                 raise ValueError("No valid cost terms for optimization")
 
-            # Initialize parameters with improved scaling
-            params = np.random.uniform(-np.pi/4, np.pi/4, 2 * self.depth)
+            # Improved parameter initialization
+            params = np.zeros(2 * self.depth)
+            for i in range(self.depth):
+                params[2*i] = np.random.uniform(-np.pi/8, np.pi/8)  # gamma
+                params[2*i+1] = np.pi/4 + np.random.uniform(-np.pi/8, np.pi/8)  # beta
+
             costs = []
             best_params = None
             best_cost = float('inf')
+
+            # Adaptive optimization parameters
+            alpha = 0.1  # Initial learning rate
+            min_alpha = 0.01
+            patience = 5
+            no_improvement = 0
 
             def cost_function(p):
                 measurements = self.get_expectation_values(p, valid_terms)
@@ -137,11 +164,9 @@ class QiskitQAOA:
                           for coeff, (i, j) in valid_terms)
                 return float(cost)
 
-            # Adaptive optimization
-            alpha = 0.1  # Initial learning rate
-            min_alpha = 0.01
-            patience = 5
-            no_improvement = 0
+            # Optimize with adaptive learning rate and momentum
+            momentum = np.zeros_like(params)
+            beta1 = 0.9  # Momentum coefficient
 
             for step in range(steps):
                 current_cost = cost_function(params)
@@ -161,17 +186,21 @@ class QiskitQAOA:
                     no_improvement = 0
                     logger.debug(f"Reduced learning rate to {alpha:.6f}")
 
-                # Compute gradient
-                grad = np.zeros_like(params)
-                eps = 1e-3
-                for i in range(len(params)):
+                # Compute gradient with parallel execution
+                def compute_gradient_component(i):
+                    eps = 1e-3
                     params_plus = params.copy()
                     params_plus[i] += eps
                     cost_plus = cost_function(params_plus)
-                    grad[i] = (cost_plus - current_cost) / eps
+                    return (cost_plus - current_cost) / eps
 
-                # Update parameters
-                params -= alpha * grad
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    grad = list(executor.map(compute_gradient_component, range(len(params))))
+                grad = np.array(grad)
+
+                # Update with momentum
+                momentum = beta1 * momentum + (1 - beta1) * grad
+                params -= alpha * momentum
 
                 if step % 10 == 0:
                     logger.info(f"Step {step}: Cost = {current_cost:.6f}, Learning rate = {alpha:.6f}")

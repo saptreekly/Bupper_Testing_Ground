@@ -163,6 +163,13 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
     start_time = time.time()
 
     try:
+        # Calculate total qubits needed
+        total_qubits = n_cities * n_cities * n_vehicles
+        max_qubits = 25 if backend == 'pennylane' else 50  # Different limits for different backends
+
+        if total_qubits > max_qubits:
+            raise ValueError(f"Problem size too large: {total_qubits} qubits required, but maximum is {max_qubits} for {backend} backend. Please reduce number of cities or vehicles.")
+
         coordinates, nodes, network = generate_street_network_cities(n_cities, place_name)
         demands = generate_random_demands(n_cities)
         qubo = QUBOFormulation(n_cities, n_vehicles, [float('inf')] * n_vehicles)
@@ -176,7 +183,7 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         metrics['problem_size'] = {
             'n_cities': n_cities,
             'n_vehicles': n_vehicles,
-            'n_qubits': n_cities * n_cities * n_vehicles
+            'n_qubits': total_qubits
         }
         logger.info(f"Problem size metrics: {metrics['problem_size']}")
 

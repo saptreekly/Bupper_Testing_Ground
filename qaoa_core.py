@@ -8,7 +8,12 @@ logger = logging.getLogger(__name__)
 class QAOACircuit:
     def __init__(self, n_qubits: int, depth: int = 1):
         """Initialize QAOA circuit with size limits and adaptive depth."""
-        self.n_qubits = min(n_qubits, 25)  # Hard limit at 25 qubits
+        # Hard limit at 25 qubits for PennyLane
+        self.max_qubits = 25
+        if n_qubits > self.max_qubits:
+            raise ValueError(f"Number of qubits ({n_qubits}) exceeds maximum allowed ({self.max_qubits})")
+
+        self.n_qubits = min(n_qubits, self.max_qubits)
         # Adaptive depth based on problem size
         self.depth = min(depth, max(1, self.n_qubits // 4))
         try:

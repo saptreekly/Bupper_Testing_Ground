@@ -79,7 +79,7 @@ class StreetNetwork:
         c = 2 * math.asin(math.sqrt(a))
         return R * c
 
-    def get_random_nodes(self, n: int, min_distance: float = 800) -> List[int]:  # Increased minimum distance
+    def get_random_nodes(self, n: int, min_distance: float = 1600) -> List[int]:  # Increased minimum distance
         """Get n random nodes that are at least min_distance meters apart."""
         try:
             start_time = time.time()

@@ -31,6 +31,10 @@ args = "QAOA Benchmark"
 task = "workflow.run"
 args = "QAOA Street Network"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Flask Server"
+
 [[workflows.workflow]]
 name = "QAOA Routing Optimizer"
 author = "agent"
@@ -101,5 +105,24 @@ task = "packager.installForAll"
 task = "shell.exec"
 args = "python example.py --cities 4 --location 'San Francisco, California, USA' --backend qiskit --hybrid"
 
+[[workflows.workflow]]
+name = "Flask Server"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python app.py"
+waitForPort = 3000
+
 [deployment]
 run = ["sh", "-c", "python example.py --backend qiskit --cities 4 --hybrid --qaoa-depth 2"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80

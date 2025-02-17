@@ -227,6 +227,12 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         binary_solution = [1 if x > 0 else 0 for x in measurements]
         routes = qubo.decode_solution(binary_solution)
 
+        # Store routes in metrics
+        metrics['routes'] = routes
+        metrics['network'] = network
+        metrics['nodes'] = nodes
+
+
         total_length = 0
         max_route_length = 0
         for route in routes:
@@ -251,8 +257,6 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         metrics['quantum_classical_gap'] = (total_length - classical_length) / classical_length
 
         logger.info(f"Solution metrics - Length: {total_length:.2f}, Gap to classical: {metrics['quantum_classical_gap']:.1%}")
-        metrics['network'] = network
-        metrics['nodes'] = nodes
         return metrics
 
     except Exception as e:
@@ -317,12 +321,16 @@ def main():
 
                         if metrics:
                             if 'network' in metrics and 'nodes' in metrics:
-                                routes = metrics['routes'] if 'routes' in metrics else []
+                                routes = metrics.get('routes', [])
                                 if routes:
                                     node_routes = [[metrics['nodes'][i] for i in route] for route in routes]
                                     metrics['network'].create_folium_map(
                                         node_routes,
                                         save_path=f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities.html"
+                                    )
+                                    metrics['network'].create_static_map(
+                                        node_routes,
+                                        save_path=f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities.png"
                                     )
 
             visualizer.plot_benchmark_results(all_metrics, save_path="benchmark_results.png")

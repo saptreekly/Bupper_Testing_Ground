@@ -243,7 +243,7 @@ class StreetNetwork:
             # Plot each route
             for route_idx, route in enumerate(routes):
                 color = colors[route_idx % len(colors)]
-                logger.info(f"Plotting route {route_idx+1}/{len(routes)}")
+                logger.info(f"Plotting route {route_idx+1}/{len(routes)} with nodes: {route}")
 
                 # Plot path between each consecutive pair of nodes
                 for i in range(len(route)-1):
@@ -253,6 +253,7 @@ class StreetNetwork:
                     try:
                         path = nx.shortest_path(self.G, start, end, weight='length')
                         path_coords = self.get_node_coordinates(path)
+                        logger.info(f"Path from node {start} to {end} has {len(path_coords)} coordinates")
 
                         # Create a line for the path
                         folium.PolyLine(
@@ -291,7 +292,7 @@ class StreetNetwork:
                         ).add_to(m)
 
                     except Exception as e:
-                        logger.warning(f"Could not plot path in route {route_idx}: {str(e)}")
+                        logger.error(f"Could not plot path in route {route_idx} between nodes {start}-{end}: {str(e)}")
                         continue
 
             # Add a legend

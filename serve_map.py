@@ -10,13 +10,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def serve_map():
-    try:
-        with socketserver.TCPServer(("0.0.0.0", PORT), Handler) as httpd:
-            logger.info(f"Serving map at port {PORT}")
-            httpd.serve_forever()
-    except Exception as e:
-        logger.error(f"Error serving map: {str(e)}")
-        raise
+    logger.warning("This server is deprecated. Please use the Flask app (app.py) instead.")
+    return
 
 if __name__ == "__main__":
-    serve_map()
+    logger.warning("This script is deprecated. Please use 'python app.py' instead.")

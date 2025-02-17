@@ -270,6 +270,10 @@ class QiskitQAOA:
             param_history = []
             cost_history = []
 
+            initial_cost = cost_function(params)
+            if callback:
+                callback(0, initial_cost)
+
             for step in range(steps):
                 try:
                     current_cost = cost_function(params)
@@ -277,9 +281,17 @@ class QiskitQAOA:
                     cost_history.append(current_cost)
                     param_history.append(params.copy())
 
-                    # Call the callback function if provided with detailed status
+                    # Call the callback function with detailed status
                     if callback:
-                        callback(step, current_cost)
+                        progress_data = {
+                            "step": step,
+                            "total_steps": steps,
+                            "cost": current_cost,
+                            "best_cost": best_cost if best_cost != float('inf') else current_cost,
+                            "progress": step / steps,
+                            "learning_rate": alpha
+                        }
+                        callback(step, progress_data)
 
                     if current_cost < best_cost:
                         improvement = (best_cost - current_cost) / abs(best_cost) if best_cost != float('inf') else 1.0
@@ -298,6 +310,8 @@ class QiskitQAOA:
                         len(cost_history) > 10 and 
                         abs(np.mean(cost_history[-5:]) - np.mean(cost_history[-10:-5])) < min_improvement
                     ):
+                        if callback:
+                            callback(step, current_cost)
                         logger.info(f"Early stopping at step {step}")
                         break
 

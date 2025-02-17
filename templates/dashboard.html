@@ -23,24 +23,80 @@
             height: 400px;
             margin-bottom: 20px;
         }
-        .loading-overlay {
+        .optimization-overlay {
             position: fixed;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(255, 255, 255, 0.8);
+            background: rgba(255, 255, 255, 0.95);
             display: none;
-            justify-content: center;
-            align-items: center;
             z-index: 1000;
         }
-        .backend-selector {
-            margin-bottom: 20px;
+        .optimization-content {
+            width: 80%;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
-        .optimization-status {
-            margin-top: 10px;
+        .progress-container {
+            margin: 20px 0;
+        }
+        .progress {
+            height: 25px;
+            margin-bottom: 10px;
+        }
+        #optimization-status {
+            font-size: 1.2em;
+            margin-bottom: 15px;
+        }
+        #progress-log {
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.9em;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+            margin-bottom: 15px;
+        }
+        .progress-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-bottom: 1px solid #eee;
+        }
+        .progress-entry .timestamp {
+            color: #666;
+            margin-right: 10px;
+        }
+        .progress-entry.error {
+            color: #dc3545;
+            background-color: #fff8f8;
+        }
+        .live-metrics {
+            display: flex;
+            justify-content: space-between;
+            margin: 15px 0;
+        }
+        .live-metric {
+            text-align: center;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            flex: 1;
+            margin: 0 5px;
+        }
+        .live-metric-value {
+            font-size: 1.2em;
             font-weight: bold;
+        }
+        .live-metric-label {
+            font-size: 0.9em;
+            color: #666;
         }
         #map-container {
             height: 500px;
@@ -57,41 +113,38 @@
         #backend-comparison {
             height: 300px;
         }
-        #progress-log {
-            height: 200px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 0.9em;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            background-color: #f8f9fa;
-        }
-        .progress-entry {
-            margin: 5px 0;
-            padding: 5px;
-            border-bottom: 1px solid #eee;
-        }
-        .progress-entry .timestamp {
-            color: #666;
-            margin-right: 10px;
-        }
-        .progress-entry.error {
-            color: #dc3545;
-            background-color: #fff8f8;
-        }
     </style>
 </head>
 <body>
-    <div class="loading-overlay" id="loading-overlay">
-        <div class="spinner-container">
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">Loading...</span>
+    <div class="optimization-overlay" id="optimization-overlay">
+        <div class="optimization-content">
+            <h3>Optimization Progress</h3>
+            <div id="optimization-status">Initializing optimization...</div>
+
+            <div class="progress-container">
+                <div class="progress">
+                    <div id="optimization-progress" class="progress-bar progress-bar-striped progress-bar-animated" 
+                         role="progressbar" style="width: 0%">0%</div>
+                </div>
             </div>
-            <div class="optimization-status" id="optimization-status">
-                Optimizing routes...<br>
-                <small class="text-muted">This may take a few minutes</small>
+
+            <div class="live-metrics">
+                <div class="live-metric">
+                    <div class="live-metric-label">Current Step</div>
+                    <div class="live-metric-value" id="current-step">-</div>
+                </div>
+                <div class="live-metric">
+                    <div class="live-metric-label">Current Cost</div>
+                    <div class="live-metric-value" id="current-cost">-</div>
+                </div>
+                <div class="live-metric">
+                    <div class="live-metric-label">Best Cost</div>
+                    <div class="live-metric-value" id="best-cost">-</div>
+                </div>
             </div>
+
+            <div id="live-optimization-chart"></div>
+            <div id="progress-log"></div>
         </div>
     </div>
 
@@ -130,13 +183,6 @@
                     </div>
                 </div>
 
-                <!-- Progress Updates -->
-                <div class="card dashboard-card">
-                    <div class="card-body">
-                        <h5 class="card-title">Optimization Progress</h5>
-                        <div id="progress-log"></div>
-                    </div>
-                </div>
 
                 <!-- Key Metrics -->
                 <div class="card dashboard-card">
@@ -204,11 +250,24 @@
     </div>
 
     <script>
-        // Initialize Socket.IO connection
         const socket = io();
         let currentTaskId = null;
+        let bestCost = Infinity;
+        let costHistory = [];
 
-        // Add progress log entry with enhanced formatting
+        // Initialize Plotly optimization chart
+        Plotly.newPlot('live-optimization-chart', [{
+            y: [],
+            type: 'scatter',
+            name: 'Cost Function'
+        }], {
+            title: 'Optimization Progress',
+            xaxis: { title: 'Step' },
+            yaxis: { title: 'Cost' },
+            height: 300,
+            margin: { t: 30, b: 40, l: 60, r: 10 }
+        });
+
         function addProgressEntry(message, timestamp, data = null) {
             const progressLog = document.getElementById('progress-log');
             const entry = document.createElement('div');
@@ -232,10 +291,31 @@
             progressLog.appendChild(entry);
             progressLog.scrollTop = progressLog.scrollHeight;
 
-            // Update the status in the loading overlay
+            // Update status and progress
             if (data?.status) {
                 document.getElementById('optimization-status').innerHTML = 
                     `${data.status}<br><small class="text-muted">${message}</small>`;
+            }
+
+            // Update live metrics if available
+            if (data) {
+                if (data.step !== undefined) {
+                    document.getElementById('current-step').textContent = data.step;
+                }
+                if (data.cost !== undefined) {
+                    document.getElementById('current-cost').textContent = data.cost.toFixed(4);
+                    costHistory.push(data.cost);
+                    if (data.cost < bestCost) {
+                        bestCost = data.cost;
+                        document.getElementById('best-cost').textContent = bestCost.toFixed(4);
+                    }
+                }
+                if (data.progress !== undefined) {
+                    const progressBar = document.getElementById('optimization-progress');
+                    const progressPercent = Math.round(data.progress * 100);
+                    progressBar.style.width = `${progressPercent}%`;
+                    progressBar.textContent = `${progressPercent}%`;
+                }
             }
         }
 
@@ -277,9 +357,6 @@
 
         // Update dashboard with new optimization results
         function updateDashboard(data) {
-            // Hide loading overlay
-            document.getElementById('loading-overlay').style.display = 'none';
-
             // Update metrics
             document.getElementById('total-time').textContent = `${data.metrics.total_time.toFixed(2)}s`;
             document.getElementById('solution-length').textContent = `${data.metrics.solution_length.toFixed(2)}m`;
@@ -313,11 +390,17 @@
         document.getElementById('optimization-form').addEventListener('submit', async (e) => {
             e.preventDefault();
 
-            // Show loading overlay
-            document.getElementById('loading-overlay').style.display = 'flex';
-
-            // Clear previous progress log
+            // Reset optimization state
+            bestCost = Infinity;
+            costHistory = [];
             document.getElementById('progress-log').innerHTML = '';
+            document.getElementById('current-step').textContent = '-';
+            document.getElementById('current-cost').textContent = '-';
+            document.getElementById('best-cost').textContent = '-';
+            document.getElementById('optimization-progress').style.width = '0%';
+
+            // Show optimization overlay instead of loading overlay
+            document.getElementById('optimization-overlay').style.display = 'block';
 
             const form = e.target;
             const formData = {
@@ -340,26 +423,25 @@
                 if (data.success) {
                     if (data.task_id) {
                         currentTaskId = data.task_id;
-                        // Listen for task-specific progress updates
                         socket.on(`optimization_progress_${data.task_id}`, (update) => {
                             addProgressEntry(update.message, update.timestamp, update.data);
 
-                            // Update optimization progress chart if cost data is available
                             if (update.data && update.data.cost !== undefined) {
-                                Plotly.extendTraces('metrics-history', {
+                                Plotly.extendTraces('live-optimization-chart', {
                                     y: [[update.data.cost]]
                                 }, [0]);
                             }
                         });
                     }
+                    document.getElementById('optimization-overlay').style.display = 'none';
                     updateDashboard(data);
                 } else {
                     addProgressEntry('Error: ' + data.error, new Date().toLocaleTimeString(), { error: true });
-                    document.getElementById('loading-overlay').style.display = 'none';
+                    document.getElementById('optimization-overlay').style.display = 'none';
                 }
             } catch (error) {
                 addProgressEntry('Error during optimization: ' + error.message, new Date().toLocaleTimeString(), { error: true });
-                document.getElementById('loading-overlay').style.display = 'none';
+                document.getElementById('optimization-overlay').style.display = 'none';
             }
         });
 

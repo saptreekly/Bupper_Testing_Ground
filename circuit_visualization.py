@@ -12,7 +12,6 @@ class CircuitVisualizer:
         """Initialize the circuit visualizer."""
         try:
             plt.style.use('default')
-            # Set non-interactive backend
             plt.switch_backend('Agg')
             logger.info("Successfully initialized circuit visualizer")
         except Exception as e:
@@ -41,35 +40,39 @@ class CircuitVisualizer:
                    save_path: str = "route.png"):
         """
         Plot and save the optimized route on a grid with obstacles.
-        Shows grid-aligned paths (vertical then horizontal) between cities.
+        Shows grid-aligned paths between cities.
         """
         try:
             plt.figure(figsize=(12, 12))
             ax = plt.gca()
 
-            # Draw grid
+            # Draw grid with higher opacity for better visibility
             for i in range(grid_size + 1):
-                plt.axhline(y=i, color='gray', linestyle='-', alpha=0.2)
-                plt.axvline(x=i, color='gray', linestyle='-', alpha=0.2)
+                plt.axhline(y=i, color='gray', linestyle='-', alpha=0.3)
+                plt.axvline(x=i, color='gray', linestyle='-', alpha=0.3)
 
             # Create set of blocked squares from obstacles
             blocked_squares = set()
             if obstacles:
                 for obs_type, x, y in obstacles:
-                    if obs_type == 'h':
-                        blocked_squares.add((x, y-1))
-                    else:  # vertical
-                        blocked_squares.add((x-1, y))
+                    if obs_type == 'h':  # Horizontal obstacle
+                        blocked_squares.add((x, y))
+                        blocked_squares.add((x+1, y))
+                    else:  # Vertical obstacle
+                        blocked_squares.add((x, y))
+                        blocked_squares.add((x, y+1))
 
-            # Draw obstacles as solid blocks
+            # Draw obstacles as solid blocks with higher opacity and darker color
             for x, y in blocked_squares:
-                rect = Rectangle((x, y), 1, 1, facecolor='red', alpha=0.3)
+                rect = Rectangle((x-0.5, y-0.5), 1, 1, 
+                               facecolor='darkred', edgecolor='black',
+                               alpha=0.8, zorder=2)
                 ax.add_patch(rect)
 
             # Plot cities with larger markers
             x_coords = [coord[0] for coord in coordinates]
             y_coords = [coord[1] for coord in coordinates]
-            plt.scatter(x_coords, y_coords, c='red', s=200, zorder=5)
+            plt.scatter(x_coords, y_coords, c='blue', s=200, zorder=5)
 
             # Plot route segments between cities using A* paths
             if route_paths:
@@ -84,9 +87,9 @@ class CircuitVisualizer:
                         dy = end[1] - start[1]
 
                         if dx == 0 or dy == 0:  # Only draw grid-aligned segments
-                            # Draw segment
+                            # Draw segment with higher z-order to appear above obstacles
                             plt.plot([start[0], end[0]], [start[1], end[1]], 
-                                    'b-', linewidth=2, zorder=3)
+                                    'g-', linewidth=3, zorder=4)
 
                             # Add direction arrow at midpoint
                             mid_x = (start[0] + end[0]) / 2
@@ -94,23 +97,23 @@ class CircuitVisualizer:
                             if dx == 0:  # Vertical movement
                                 plt.arrow(mid_x, mid_y - dy*0.2,
                                         0, dy*0.4,
-                                        head_width=0.2, head_length=0.3,
-                                        fc='blue', ec='blue',
+                                        head_width=0.3, head_length=0.4,
+                                        fc='green', ec='green',
                                         length_includes_head=True,
-                                        zorder=4)
+                                        zorder=6)
                             else:  # Horizontal movement
                                 plt.arrow(mid_x - dx*0.2, mid_y,
                                         dx*0.4, 0,
-                                        head_width=0.2, head_length=0.3,
-                                        fc='blue', ec='blue',
+                                        head_width=0.3, head_length=0.4,
+                                        fc='green', ec='green',
                                         length_includes_head=True,
-                                        zorder=4)
+                                        zorder=6)
 
             # Add city labels with larger font
             for i, (x, y) in enumerate(coordinates):
                 plt.annotate(f'City {i}', (x, y), 
-                           xytext=(5, 5), textcoords='offset points',
-                           fontsize=12, fontweight='bold')
+                            xytext=(5, 5), textcoords='offset points',
+                            fontsize=12, fontweight='bold')
 
             plt.title('Optimized Route with Obstacles', fontsize=14, pad=20)
             plt.xlabel('X Coordinate')

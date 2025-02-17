@@ -34,8 +34,8 @@ def generate_grid_cities(n_cities, grid_size=16):
         x_min, y_min, x_max, y_max = quadrants[i]
         attempts = 100  # Maximum attempts per quadrant
         while attempts > 0:
-            x = np.random.randint(x_min, x_max)
-            y = np.random.randint(y_min, y_max)
+            x = random.randint(x_min, x_max)
+            y = random.randint(y_min, y_max)
             if is_far_enough((x, y)):
                 positions.add((x, y))
                 break
@@ -43,38 +43,42 @@ def generate_grid_cities(n_cities, grid_size=16):
 
     # Fill remaining cities with distance constraints
     while len(positions) < n_cities:
-        x = np.random.randint(0, grid_size)
-        y = np.random.randint(0, grid_size)
+        x = random.randint(0, grid_size)
+        y = random.randint(0, grid_size)
         if is_far_enough((x, y)):
             positions.add((x, y))
 
-    # Log distances between cities
     positions_list = list(positions)
     logger.info("Generated city coordinates: %s", positions_list)
     for i in range(len(positions_list)):
         for j in range(i+1, len(positions_list)):
             dist = manhattan_dist(positions_list[i], positions_list[j])
-            logger.info("Distance between cities %d and %d: %d units", 
-                       i, j, dist)
+            logger.info("Distance between cities %d and %d: %d units", i, j, dist)
 
     return positions_list
 
 def generate_obstacles(grid_size=16, obstacle_density=0.1):
     """Generate random larger obstacles (2x2 blocks)."""
     obstacles = set()
-    total_possible_blocks = (grid_size - 1) * (grid_size - 1)  # Account for 2x2 blocks
+    total_possible_blocks = (grid_size - 1) * (grid_size - 1) // 4  # Account for 2x2 blocks
     n_obstacles = int(total_possible_blocks * obstacle_density)
 
-    while len(obstacles) < n_obstacles:
+    while len(obstacles) < n_obstacles * 4:  # 4 edges per obstacle
         # Generate top-left corner of 2x2 block
         x = random.randint(0, grid_size-2)
         y = random.randint(0, grid_size-2)
 
         # Add all edges of 2x2 block
-        obstacles.add(('h', x, y))      # Top edge
-        obstacles.add(('h', x, y+1))    # Bottom edge
-        obstacles.add(('v', x, y))      # Left edge
-        obstacles.add(('v', x+1, y))    # Right edge
+        edges = [
+            ('h', x, y),      # Top horizontal edge
+            ('h', x, y+1),    # Bottom horizontal edge
+            ('v', x, y),      # Left vertical edge
+            ('v', x+1, y)     # Right vertical edge
+        ]
+
+        # Check if any edge already exists or if it would block a critical path
+        if not any(edge in obstacles for edge in edges):
+            obstacles.update(edges)
 
     return obstacles
 
@@ -83,65 +87,76 @@ def manhattan_distance_with_obstacles(city1, city2, obstacles, grid_size):
     def get_neighbors(pos):
         x, y = pos
         neighbors = []
-        # Only allow vertical and horizontal movements (no diagonals)
-        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:  # Four directions
+
+        # Priority order: Up, Right, Down, Left
+        # This ensures we prefer upward movement before trying rightward movement
+        for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
             new_x, new_y = x + dx, y + dy
-            if 0 <= new_x <= grid_size and 0 <= new_y <= grid_size:
-                # Check if move crosses any obstacle
-                if dx == 0:  # Vertical movement
-                    if not ('v', min(x, new_x), min(y, new_y)) in obstacles:
-                        neighbors.append((new_x, new_y))
-                else:  # Horizontal movement
-                    if not ('h', min(x, new_x), min(y, new_y)) in obstacles:
-                        neighbors.append((new_x, new_y))
+
+            # Skip if outside grid
+            if new_x < 0 or new_x > grid_size or new_y < 0 or new_y > grid_size:
+                continue
+
+            # Check for barriers based on movement direction
+            blocked = False
+            if dx == 0:  # Vertical movement
+                if dy > 0:  # Moving up
+                    blocked = ('h', x, y) in obstacles
+                else:  # Moving down
+                    blocked = ('h', x, y-1) in obstacles
+            else:  # Horizontal movement
+                if dx > 0:  # Moving right
+                    blocked = ('v', x, y) in obstacles
+                else:  # Moving left
+                    blocked = ('v', x-1, y) in obstacles
+
+            if not blocked:
+                neighbors.append((new_x, new_y))
+
         return neighbors
 
     def heuristic(pos1, pos2):
-        # Manhattan distance heuristic
+        """Manhattan distance heuristic."""
         return abs(pos1[0] - pos2[0]) + abs(pos1[1] - pos2[1])
 
-    def a_star_search(start, goal):
-        frontier = []
-        heappush(frontier, (0, start))
-        came_from = {start: None}
-        cost_so_far = {start: 0}
-
-        while frontier:
-            current = heappop(frontier)[1]
-
-            if current == goal:
-                break
-
-            for next_pos in get_neighbors(current):
-                new_cost = cost_so_far[current] + 1
-
-                if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
-                    cost_so_far[next_pos] = new_cost
-                    priority = new_cost + heuristic(next_pos, goal)
-                    heappush(frontier, (priority, next_pos))
-                    came_from[next_pos] = current
-
-        if goal not in came_from:
-            return float('inf'), []
-
-        # Reconstruct path
+    def reconstruct_path(came_from, current):
         path = []
-        current = goal
         while current is not None:
             path.append(current)
             current = came_from[current]
-        path.reverse()
+        return path[::-1]
 
-        return cost_so_far[goal], path
+    # A* search implementation
+    start, goal = city1, city2
+    frontier = []
+    heappush(frontier, (0, start))
+    came_from = {start: None}
+    cost_so_far = {start: 0}
+    visited = set()
 
-    path_length, path = a_star_search(city1, city2)
-    if path_length == float('inf'):
-        logger.warning(f"No valid path found between cities at {city1} and {city2}")
-        return grid_size * 10, []
+    while frontier:
+        _, current = heappop(frontier)
 
-    # Log the found path
-    logger.debug(f"Found path from {city1} to {city2}: {path}")
-    return path_length, path
+        if current == goal:
+            return cost_so_far[goal], reconstruct_path(came_from, current)
+
+        if current in visited:
+            continue
+
+        visited.add(current)
+
+        for next_pos in get_neighbors(current):
+            new_cost = cost_so_far[current] + 1
+
+            if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
+                cost_so_far[next_pos] = new_cost
+                priority = new_cost + heuristic(next_pos, goal)
+                heappush(frontier, (priority, next_pos))
+                came_from[next_pos] = current
+
+    # No valid path found - return high cost
+    logger.warning(f"No valid path found between cities at {start} and {goal}")
+    return grid_size * 10, []
 
 def decode_measurements(measurements, n_cities):
     """

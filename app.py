@@ -34,6 +34,14 @@ def optimize():
 
         logger.info(f"Starting optimization with {n_cities} cities using {backend} backend")
 
+        # Check for client disconnect
+        if request.environ.get('werkzeug.server.shutdown'):
+            logger.info("Client disconnected, stopping optimization")
+            return jsonify({
+                'success': False,
+                'error': 'Optimization cancelled by user'
+            }), 499
+
         try:
             metrics = benchmark_optimization(
                 n_cities=n_cities,

@@ -31,11 +31,9 @@ class QiskitQAOA:
                 basis_gates=['u1', 'u2', 'u3', 'cx']
             )
 
-            # Initialize estimator with improved settings
+            # Initialize estimator with correct parameters for current Qiskit version
             self.estimator = BackendEstimator(
                 backend=self.backend,
-                skip_transpilation=False,  # Enable automatic circuit optimization
-                bound_pass_manager=True,  # Use bounded-depth circuit transformations
             )
 
             logger.info(f"Initialized Qiskit backend with {n_qubits} qubits")

@@ -11,12 +11,11 @@ class QAOACircuit:
         self.n_qubits = min(n_qubits, 25)  # Hard limit at 25 qubits
         self.depth = depth
         try:
-            # Use default.qubit with autograd interface for better gradient computation
             self.dev = qml.device('default.qubit', wires=self.n_qubits)
             self.circuit = qml.QNode(self._circuit_implementation, 
                                    self.dev,
                                    interface="autograd",
-                                   diff_method="parameter-shift")
+                                   diff_method="backprop")
             logger.info("Initialized quantum device with %d qubits", self.n_qubits)
         except Exception as e:
             logger.error("Failed to initialize quantum device: %s", str(e))
@@ -27,11 +26,9 @@ class QAOACircuit:
         valid_terms = []
         seen_wire_pairs = set()
 
-        # First pass: find maximum coefficient for scaling
         max_coeff = max(abs(coeff) for coeff, _ in cost_terms) if cost_terms else 1.0
         logger.debug("Maximum coefficient: %.6f", max_coeff)
 
-        # Relaxed threshold (0.01% of max coefficient)
         threshold = max_coeff * 0.0001
         logger.debug("Coefficient threshold: %.6f", threshold)
 
@@ -49,7 +46,6 @@ class QAOACircuit:
                 logger.debug("Skipping duplicate wire pair: %s", wire_pair)
                 continue
 
-            # Normalize coefficient for numerical stability
             norm_coeff = coeff / max_coeff
             valid_terms.append((norm_coeff, wire_pair))
             seen_wire_pairs.add(wire_pair)
@@ -64,30 +60,27 @@ class QAOACircuit:
         return valid_terms
 
     def _circuit_implementation(self, params, cost_terms):
-        """QAOA circuit implementation using IsingXX gates with multiple layers."""
+        """QAOA circuit implementation."""
         try:
-            # Convert params to array for proper gradient computation
-            params = np.array(params, requires_grad=True)
-
             # Initial state preparation
             for i in range(self.n_qubits):
                 qml.Hadamard(wires=i)
 
             # Implement QAOA layers
             for layer in range(self.depth):
-                # Cost Hamiltonian with IsingXX interactions
+                # Cost Hamiltonian phase
                 gamma = params[2 * layer]
-                beta = params[2 * layer + 1]
-
-                # Apply cost Hamiltonian
                 for coeff, (i, j) in cost_terms:
-                    qml.IsingXX(2 * gamma * coeff, wires=[i, j])
+                    qml.CNOT(wires=[i, j])
+                    qml.RZ(2 * gamma * coeff, wires=j)
+                    qml.CNOT(wires=[i, j])
 
-                # Apply mixer Hamiltonian
+                # Mixer Hamiltonian phase
+                beta = params[2 * layer + 1]
                 for i in range(self.n_qubits):
                     qml.RX(2 * beta, wires=i)
 
-            # Measure in computational basis
+            # Return expectation values using computational basis
             return [qml.expval(qml.PauliZ(i)) for i in range(self.n_qubits)]
 
         except Exception as e:
@@ -102,49 +95,46 @@ class QAOACircuit:
                 raise ValueError("No valid cost terms for optimization")
 
             # Initialize parameters with proper scaling
-            params = np.random.uniform(low=-np.pi/4, high=np.pi/4, size=2 * self.depth)
-            params = np.array(params, requires_grad=True)
+            params = qml.numpy.array([np.random.uniform(-np.pi/8, np.pi/8) for _ in range(2 * self.depth)])
             logger.info("Initial parameters: %s", str(params))
 
-            # Use Adam optimizer for better convergence
-            opt = qml.AdamOptimizer(stepsize=0.1)
+            # Use Adam optimizer with adjusted parameters
+            opt = qml.AdamOptimizer(stepsize=0.05, beta1=0.9, beta2=0.999)
             costs = []
 
             def cost_function(p):
                 """Enhanced cost function with proper scaling."""
                 try:
                     measurements = self.circuit(p, valid_terms)
-                    cost = 0.0
-                    for coeff, (i, j) in valid_terms:
-                        term_cost = coeff * measurements[i] * measurements[j]
-                        cost += term_cost
-                        logger.debug("Term (%d,%d) contribution: %.6f", i, j, term_cost)
+                    cost = sum(coeff * measurements[i] * measurements[j] 
+                             for coeff, (i, j) in valid_terms)
 
                     final_cost = float(cost)
-                    logger.debug("Final cost: %.6f", final_cost)
+                    logger.debug("Cost function evaluation: %.6f", final_cost)
                     return final_cost
 
                 except Exception as e:
                     logger.error("Error in cost function: %s", str(e))
                     raise
 
-            # Optimization loop with early stopping
+            # Optimization loop with adaptive early stopping
             best_cost = float('inf')
             patience = 10
             no_improvement = 0
+            min_cost_change = 1e-4
 
             for step in range(steps):
                 try:
-                    # Explicitly compute gradients and update parameters
-                    params = opt.step(cost_function, params)
+                    # Use step_and_cost to track both gradients and cost
+                    params, prev_cost = opt.step_and_cost(cost_function, params)
                     current_cost = cost_function(params)
                     costs.append(float(current_cost))
 
                     logger.info("Step %d: Cost = %.6f, Params = %s", 
                               step, current_cost, str(params))
 
-                    # Early stopping logic
-                    if current_cost < best_cost - 1e-6:  # Small threshold for numerical stability
+                    # Early stopping logic with minimum improvement threshold
+                    if current_cost < best_cost - min_cost_change:
                         best_cost = current_cost
                         no_improvement = 0
                     else:

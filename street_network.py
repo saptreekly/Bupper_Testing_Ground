@@ -8,6 +8,7 @@ import time
 from shapely.geometry import box
 import random
 import math
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
@@ -297,4 +298,76 @@ class StreetNetwork:
 
         except Exception as e:
             logger.error(f"Error creating map visualization: {str(e)}")
+            raise
+
+    def create_static_map(self, routes: List[List[int]], save_path: str = "route_map.png"):
+        """Create a static map visualization of the routes."""
+        try:
+            start_time = time.time()
+            logger.info("Creating static map visualization")
+
+            # Create figure
+            plt.figure(figsize=(12, 8))
+
+            # Get center point of the network
+            center_point = self.node_positions.unary_union.centroid
+
+            # Plot the street network edges
+            for _, row in ox.graph_to_gdfs(self.G, nodes=False).iterrows():
+                plt.plot([row.geometry.coords[0][0], row.geometry.coords[1][0]],
+                        [row.geometry.coords[0][1], row.geometry.coords[1][1]],
+                        color='gray', alpha=0.2, linewidth=1, zorder=1)
+
+            # Create a color for each route
+            colors = ['red', 'blue', 'green', 'purple', 'orange', 'darkred', 'darkblue', 'darkgreen']
+
+            # Plot each route
+            for route_idx, route in enumerate(routes):
+                color = colors[route_idx % len(colors)]
+                logger.info(f"Plotting route {route_idx+1}/{len(routes)}")
+
+                # Plot path between each consecutive pair of nodes
+                for i in range(len(route)-1):
+                    start = route[i]
+                    end = route[i+1]
+
+                    try:
+                        path = nx.shortest_path(self.G, start, end, weight='length')
+                        path_coords = self.get_node_coordinates(path)
+
+                        # Extract coordinates for plotting
+                        lats = [coord[0] for coord in path_coords]
+                        lons = [coord[1] for coord in path_coords]
+
+                        # Plot the path
+                        plt.plot(lons, lats, color=color, linewidth=2, zorder=3)
+
+                        # Add markers for start and end points
+                        if route_idx == 0 and i == 0:  # Depot
+                            plt.plot(lons[0], lats[0], 'r^', markersize=12, label='Depot', zorder=4)
+                        else:  # Other cities
+                            plt.plot(lons[0], lats[0], 'bo', markersize=8, zorder=4)
+
+                    except Exception as e:
+                        logger.warning(f"Could not plot path in route {route_idx}: {str(e)}")
+                        continue
+
+            # Set plot bounds
+            bounds = self.node_positions.total_bounds
+            plt.xlim([bounds[0], bounds[2]])
+            plt.ylim([bounds[1], bounds[3]])
+
+            plt.title('Optimized Vehicle Routes')
+            plt.xlabel('Longitude')
+            plt.ylabel('Latitude')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+
+            # Save the map
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            plt.close()
+            logger.info(f"Static map saved to {save_path} (time: {time.time() - start_time:.1f}s)")
+
+        except Exception as e:
+            logger.error(f"Error creating static map visualization: {str(e)}")
             raise

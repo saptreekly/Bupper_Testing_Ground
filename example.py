@@ -507,10 +507,15 @@ def main():
         visualizer = CircuitVisualizer()
         try:
             node_routes = [[nodes[i] for i in route] for route in routes]
+            # Save both HTML and PNG versions
             network.create_folium_map(node_routes, save_path="quantum_route.html")
+            network.create_static_map(node_routes, save_path="quantum_route.png")
             visualizer.plot_optimization_trajectory(costs, save_path="optimization_trajectory.png")
-            visualizer.plot_solution_comparison(coordinates, routes[0], cw_routes[0], quantum_metrics, classical_metrics, save_path="solution_comparison.png")
-            logger.info("Visualizations saved as 'quantum_route.html', 'optimization_trajectory.png', and 'solution_comparison.png'")
+            visualizer.plot_solution_comparison(coordinates, routes[0], cw_routes[0], 
+                                                quantum_metrics, classical_metrics, 
+                                                save_path="solution_comparison.png")
+            logger.info("Visualizations saved as 'quantum_route.html', 'quantum_route.png', "
+                       "'optimization_trajectory.png', and 'solution_comparison.png'")
         except Exception as viz_error:
             logger.error("Visualization error: %s", str(viz_error))
 

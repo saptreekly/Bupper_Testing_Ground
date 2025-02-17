@@ -2,15 +2,33 @@ import numpy as np
 from typing import List, Dict, Tuple, Optional
 
 class QUBOFormulation:
-    def __init__(self, n_cities: int, n_vehicles: int, vehicle_capacity: Optional[List[float]] = None):
+    def __init__(self, n_cities: int, n_vehicles: int, vehicle_capacity: Optional[List[float]] = None,
+                 backend: str = 'qiskit'):
         """Initialize QUBO formulation with problem size limits."""
-        self.n_cities = min(n_cities, 5)  # Limit to maximum 5 cities
         self.n_vehicles = n_vehicles
         self.vehicle_capacity = vehicle_capacity if vehicle_capacity else [float('inf')] * n_vehicles
+
+        # Calculate total required qubits
+        total_qubits = n_cities * n_cities * n_vehicles
+        max_qubits = 50 if backend == 'qiskit' else 25  # Backend-specific limits
+
+        # Adjust n_cities to fit within qubit limit
+        max_cities = int(np.sqrt(max_qubits / n_vehicles))
+        self.n_cities = min(n_cities, max_cities)
+
+        if n_cities > max_cities:
+            raise ValueError(
+                f"Problem size too large: {n_cities} cities would require {total_qubits} qubits. "
+                f"Maximum allowed cities for {backend} backend is {max_cities} "
+                f"with {n_vehicles} vehicles ({max_qubits} qubits)."
+            )
 
     def create_distance_matrix(self, coordinates: List[Tuple[float, float]]) -> np.ndarray:
         """Create and normalize distance matrix."""
         n = len(coordinates)
+        if n > self.n_cities:
+            raise ValueError(f"Too many coordinates provided: {n} > {self.n_cities}")
+
         distance_matrix = np.zeros((n, n))
         for i in range(n):
             for j in range(n):
@@ -96,8 +114,8 @@ class QUBOFormulation:
     def decode_solution(self, binary_solution: List[int]) -> List[List[int]]:
         """Decode binary solution to routes with improved robustness."""
         solution_matrix = np.array(binary_solution).reshape(self.n_vehicles, 
-                                                         self.n_cities, 
-                                                         self.n_cities)
+                                                        self.n_cities, 
+                                                        self.n_cities)
         routes = []
 
         for k in range(self.n_vehicles):

@@ -172,7 +172,7 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
 
         coordinates, nodes, network = generate_street_network_cities(n_cities, place_name)
         demands = generate_random_demands(n_cities)
-        qubo = QUBOFormulation(n_cities, n_vehicles, [float('inf')] * n_vehicles)
+        qubo = QUBOFormulation(n_cities, n_vehicles, [float('inf')] * n_vehicles, backend=backend)
         distance_matrix = network.get_distance_matrix(nodes)
 
         # Check for cancellation after network setup
@@ -181,9 +181,9 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
 
         metrics['problem_setup_time'] = time.time() - start_time
         metrics['problem_size'] = {
-            'n_cities': n_cities,
+            'n_cities': qubo.n_cities,  # Use adjusted n_cities from QUBO
             'n_vehicles': n_vehicles,
-            'n_qubits': total_qubits
+            'n_qubits': qubo.n_cities * qubo.n_cities * n_vehicles  # Use adjusted size
         }
         logger.info(f"Problem size metrics: {metrics['problem_size']}")
 
@@ -412,9 +412,17 @@ def main():
         n_vehicles = args.vehicles
         vehicle_capacity = [args.capacity] * n_vehicles
 
-        n_qubits = n_cities * n_cities * n_vehicles
-        if n_qubits > 16:
-            logger.error(f"Problem size too large: {n_qubits} qubits required. Please reduce number of cities or vehicles.")
+        # Calculate total qubits and validate size upfront
+        total_qubits = n_cities * n_cities * n_vehicles
+        max_qubits = 25 if args.backend == 'pennylane' else 50
+
+        if total_qubits > max_qubits:
+            logger.error(
+                f"Problem size too large: {n_cities} cities with {n_vehicles} vehicles "
+                f"would require {total_qubits} qubits. Maximum allowed for {args.backend} "
+                f"backend is {max_qubits} qubits.\n"
+                f"Please reduce the number of cities or use a different backend."
+            )
             return
 
         logger.info(f"Starting QAOA optimization for {n_cities} cities with {n_vehicles} vehicles")
@@ -436,7 +444,7 @@ def main():
         demands = generate_random_demands(n_cities)
         logger.info("City demands: %s", demands)
 
-        qubo = QUBOFormulation(n_cities, n_vehicles, vehicle_capacity)
+        qubo = QUBOFormulation(n_cities, n_vehicles, vehicle_capacity, backend=args.backend)
         distance_matrix = np.zeros((n_cities, n_cities))
         paths_between_cities = {}
 
@@ -461,14 +469,14 @@ def main():
 
         start_time = time.time()
         if args.hybrid:
-            circuit = HybridOptimizer(n_qubits, depth=qaoa_depth, backend=args.backend)
+            circuit = HybridOptimizer(total_qubits, depth=qaoa_depth, backend=args.backend)
             logger.info(f"Initialized hybrid optimizer with {args.backend} backend")
         else:
             if args.backend == 'qiskit':
-                circuit = QiskitQAOA(n_qubits, depth=qaoa_depth)
+                circuit = QiskitQAOA(total_qubits, depth=qaoa_depth)
             else:
-                circuit = QAOACircuit(n_qubits, depth=qaoa_depth)
-            logger.info(f"Initialized {args.backend} circuit with {n_qubits} qubits")
+                circuit = QAOACircuit(total_qubits, depth=qaoa_depth)
+            logger.info(f"Initialized {args.backend} circuit with {total_qubits} qubits")
 
         logger.info("Creating QUBO matrix...")
         qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)
@@ -479,8 +487,8 @@ def main():
         logger.info(f"Max coefficient: {max_coeff:.6f}, Threshold: {threshold:.6f}")
 
         n_terms_added = 0
-        for i in range(n_qubits):
-            for j in range(i + 1, n_qubits):
+        for i in range(total_qubits):
+            for j in range(i + 1, total_qubits):
                 if abs(qubo_matrix[i, j]) > threshold:
                     cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
                     n_terms_added += 1

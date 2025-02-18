@@ -2,8 +2,8 @@ import numpy as np
 from qiskit import QuantumCircuit, transpile
 from qiskit_aer import AerSimulator
 from qiskit.circuit import Parameter
-from qiskit.primitives import Estimator
 from qiskit.quantum_info import SparsePauliOp
+from qiskit.primitives import StatevectorEstimator
 import logging
 from typing import List, Tuple, Optional
 
@@ -29,7 +29,7 @@ class QiskitQAOA:
             # Initialize backend and estimator with minimal configuration
             try:
                 self.backend = AerSimulator()
-                self.estimator = Estimator()  # Use basic Estimator instead of BackendEstimator
+                self.estimator = StatevectorEstimator()
                 logger.info("Successfully initialized QiskitQAOA backend")
             except Exception as e:
                 logger.error(f"Error initializing Qiskit backend: {str(e)}")
@@ -44,9 +44,17 @@ class QiskitQAOA:
         if not isinstance(params, np.ndarray):
             params = np.array(params)
 
-        if len(params) != 2:
+        # Handle empty params by initializing with defaults
+        if len(params) == 0:
+            params = np.zeros(2)
+        elif len(params) != 2:
             logger.warning(f"Parameter validation: truncating from length {len(params)} to 2")
-            params = params[:2]
+            if len(params) < 2:
+                # Pad with zeros if too short
+                params = np.pad(params, (0, 2 - len(params)))
+            else:
+                # Truncate if too long
+                params = params[:2]
 
         # Ensure parameters are within bounds
         params[0] = np.clip(params[0], -2*np.pi, 2*np.pi)  # gamma
@@ -55,9 +63,9 @@ class QiskitQAOA:
         return params
 
     def get_expectation_values(self, params, cost_terms):
-        """Get expectation values with enhanced partition handling and validation."""
+        """Get expectation values with enhanced partition handling."""
         try:
-            # Strict parameter validation
+            # Validate parameters
             params = self._validate_and_truncate_params(params)
             gamma, beta = params
             logger.info(f"Computing expectation values with gamma={gamma:.4f}, beta={beta:.4f}")
@@ -68,76 +76,62 @@ class QiskitQAOA:
                 return np.zeros(self.n_qubits)
 
             # Split problem into partitions if needed
-            if self.n_qubits <= self.max_partition_size:
-                # Handle small problems without partitioning
-                circuit = self._create_circuit(params, cost_terms)
+            measurements = np.zeros(self.n_qubits)
+
+            for partition_idx in range(self.n_partitions):
+                start_idx = partition_idx * self.max_partition_size
+                end_idx = min(start_idx + self.max_partition_size, self.n_qubits)
+                n_partition_qubits = end_idx - start_idx
+
+                # Get partition cost terms
+                partition_terms = [(coeff, (i % n_partition_qubits, j % n_partition_qubits))
+                                 for coeff, (i, j) in cost_terms
+                                 if start_idx <= i < end_idx and start_idx <= j < end_idx]
+
+                # Create circuit for this partition
+                circuit = self._create_circuit(params, partition_terms, n_partition_qubits)
                 if circuit is None:
-                    return np.zeros(self.n_qubits)
+                    measurements[start_idx:end_idx] = np.zeros(n_partition_qubits)
+                    continue
 
+                # Transpile circuit once for this partition
                 try:
-                    # Create simple observables
+                    transpiled_circuit = transpile(circuit, self.backend)
+                    partition_values = []
+
+                    # Prepare all observables at once
                     observables = []
-                    for i in range(self.n_qubits):
-                        pauli_str = ''.join(['I'] * i + ['Z'] + ['I'] * (self.n_qubits - i - 1))
-                        observables.append(SparsePauliOp(pauli_str))
-
-                    # Execute circuit with simple error handling
-                    values = []
-                    for obs in observables:
-                        try:
-                            result = self.estimator.run(
-                                circuits=[circuit],
-                                observables=[obs],
-                            ).result()
-                            values.extend(result.values)
-                        except Exception as e:
-                            logger.error(f"Error in measurement: {str(e)}")
-                            values.append(0.0)
-
-                    return np.array(values)
-
-                except Exception as e:
-                    logger.error(f"Error in circuit execution: {str(e)}")
-                    return np.zeros(self.n_qubits)
-            else:
-                # Handle large problems with partitioning
-                logger.info(f"Problem size exceeds maximum, using {self.n_partitions} partitions")
-                measurements = np.zeros(self.n_qubits)
-
-                partitioned_terms = self._partition_cost_terms(cost_terms)
-                for partition_idx, partition_costs in partitioned_terms.items():
-                    start_idx = partition_idx * self.max_partition_size
-                    end_idx = min(start_idx + self.max_partition_size, self.n_qubits)
-                    n_partition_qubits = end_idx - start_idx
-
-                    circuit = self._create_circuit(params, partition_costs, n_qubits=n_partition_qubits)
-                    if circuit is None:
-                        measurements[start_idx:end_idx] = np.zeros(n_partition_qubits)
-                        continue
+                    for i in range(n_partition_qubits):
+                        pauli_str = 'I' * i + 'Z' + 'I' * (n_partition_qubits - i - 1)
+                        observables.append(SparsePauliOp([pauli_str]))
 
                     try:
-                        # Execute partition with error handling
-                        obs_values = []
-                        for i in range(n_partition_qubits):
-                            pauli_str = ''.join(['I'] * i + ['Z'] + ['I'] * (n_partition_qubits - i - 1))
-                            obs = SparsePauliOp(pauli_str)
-                            try:
-                                result = self.estimator.run(
-                                    circuits=[circuit],
-                                    observables=[obs],
-                                ).result()
-                                obs_values.extend(result.values)
-                            except Exception as e:
-                                logger.error(f"Error in partition {partition_idx} measurement: {str(e)}")
-                                obs_values.append(0.0)
+                        # Execute all measurements at once
+                        circuits = [transpiled_circuit] * len(observables)
+                        job = self.estimator.run(circuits, observables)
+                        results = job.result()
 
-                        measurements[start_idx:end_idx] = obs_values[:n_partition_qubits]
+                        # Extract values with validation
+                        for i, value in enumerate(results.values):
+                            try:
+                                partition_values.append(float(value))
+                                logger.debug(f"Partition {partition_idx}, qubit {i} measurement: {value:.4f}")
+                            except (TypeError, ValueError) as e:
+                                logger.error(f"Invalid measurement value for qubit {i}: {str(e)}")
+                                partition_values.append(0.0)
 
                     except Exception as e:
-                        logger.error(f"Error in partition {partition_idx} execution: {str(e)}")
-                        measurements[start_idx:end_idx] = np.zeros(n_partition_qubits)
+                        logger.error(f"Error in batch measurement execution: {str(e)}")
+                        partition_values.extend([0.0] * n_partition_qubits)
 
-                return measurements
+                    measurements[start_idx:end_idx] = partition_values
+                    logger.info(f"Completed measurements for partition {partition_idx}")
+
+                except Exception as e:
+                    logger.error(f"Error in partition {partition_idx} execution: {str(e)}")
+                    measurements[start_idx:end_idx] = np.zeros(n_partition_qubits)
+
+            return measurements
 
         except Exception as e:
             logger.error(f"Error computing expectation values: {str(e)}")
@@ -152,10 +146,7 @@ class QiskitQAOA:
 
             # Use provided n_qubits or default to self.n_qubits
             n_qubits = n_qubits if n_qubits is not None else self.n_qubits
-
-            # Validate parameters
-            params = self._validate_and_truncate_params(params)
-            gamma, beta = params
+            gamma, beta = self._validate_and_truncate_params(params)
 
             # Create and validate circuit
             circuit = QuantumCircuit(n_qubits)
@@ -163,7 +154,7 @@ class QiskitQAOA:
             # Initial state preparation
             circuit.h(range(n_qubits))
 
-            # Apply cost Hamiltonian with strict bounds checking
+            # Apply cost Hamiltonian
             for coeff, (i, j) in cost_terms:
                 if not (0 <= i < n_qubits and 0 <= j < n_qubits):
                     continue
@@ -180,7 +171,7 @@ class QiskitQAOA:
                     logger.error(f"Error applying cost gates at indices ({i}, {j}): {str(e)}")
                     continue
 
-            # Apply mixer Hamiltonian with validation
+            # Apply mixer Hamiltonian
             try:
                 circuit.rx(2 * beta, range(n_qubits))
             except Exception as e:
@@ -402,6 +393,7 @@ class QiskitQAOA:
     def _create_custom_noise_model(self):
         """Create enhanced noise model with improved error channels."""
         try:
+            from qiskit import noise
             noise_model = noise.NoiseModel()
 
             # Adaptive error rates based on circuit size and connectivity
@@ -433,7 +425,7 @@ class QiskitQAOA:
             # Add readout errors with size-dependent rates
             p_readout = base_error * size_factor
             readout_error = noise.ReadoutError([[1 - p_readout, p_readout], 
-                                                  [p_readout, 1 - p_readout]])
+                                                              [p_readout, 1 - p_readout]])
             noise_model.add_all_qubit_readout_error(readout_error)
 
             # Add gate errors with enhanced error rates
@@ -525,11 +517,12 @@ class QiskitQAOA:
     def _generate_calibration_circuits(self):
         """Generate calibration circuits for error mitigation."""
         try:
+            from qiskit import QuantumRegister
             from qiskit.ignis.mitigation.measurement import complete_meas_cal
             qr = QuantumRegister(self.n_qubits)
             cal_circuits, _ = complete_meas_cal(qubit_list=list(range(self.n_qubits)), 
-                                                  qr=qr, 
-                                                  circlabel='mcal')
+                                                                  qr=qr, 
+                                                                  circlabel='mcal')
             return cal_circuits
         except Exception as e:
             logger.error(f"Failed to generate calibration circuits: {str(e)}")

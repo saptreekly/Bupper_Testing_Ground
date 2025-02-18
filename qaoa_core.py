@@ -37,13 +37,13 @@ class QAOACircuit:
 
                 try:
                     logger.info(f"Creating device for partition {i} with {partition_size} qubits")
-                    # Set shots=None explicitly for analytic mode
+                    # Configure device for statevector simulation
                     dev = qml.device('default.qubit', wires=partition_size, shots=None)
                     self.devices.append(dev)
 
-                    # Create circuit function factory that captures cost_terms
+                    # Create circuit function with proper interface configuration
                     def create_circuit(dev, partition_size, partition_cost_terms):
-                        @qml.qnode(dev, interface="autograd")  # Specify autograd interface for better compatibility
+                        @qml.qnode(dev, interface="autograd", diff_method="parameter-shift")
                         def circuit(params):
                             # Initial state preparation
                             for i in range(partition_size):
@@ -63,7 +63,7 @@ class QAOACircuit:
                             for i in range(partition_size):
                                 qml.RX(2 * beta, wires=i)
 
-                            # Return expectation values
+                            # Return expectation values using Pauli Z measurements
                             return [qml.expval(qml.PauliZ(i)) for i in range(partition_size)]
 
                         return circuit
@@ -133,7 +133,7 @@ class QAOACircuit:
                     return float('inf')
 
             # Optimization parameters
-            steps = kwargs.get('steps', 100)
+            steps = kwargs.get('steps', 10)
             learning_rate = 0.1
             min_learning_rate = 0.01
             decay_rate = 0.995
@@ -172,6 +172,16 @@ class QAOACircuit:
 
                     costs.append(new_cost)
                     current_cost = new_cost
+
+                    if self.progress_callback:
+                        progress = step / steps
+                        self.progress_callback(step, {
+                            "status": "Optimizing quantum circuit",
+                            "progress": 0.5 + 0.4 * progress,
+                            "step": step,
+                            "total_steps": steps,
+                            "cost": float(current_cost)
+                        })
 
                 except Exception as e:
                     logger.error(f"Error in optimization step {step}: {str(e)}")

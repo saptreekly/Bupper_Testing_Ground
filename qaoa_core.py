@@ -66,19 +66,20 @@ class QAOACircuit:
         try:
             logger.info("Starting QAOA optimization")
             # Initialize parameters with slightly randomized values
-            params = np.array([np.random.uniform(0.01, 0.1), np.random.uniform(np.pi/8, np.pi/4)])
+            params = np.array([0.01, np.pi/4])  # Start with simpler initial values
             costs = []
-            steps = kwargs.get('steps', 10)  # Decreased steps for faster convergence
+            steps = kwargs.get('steps', 10)  # Default to 10 steps
 
             def cost_function(p):
                 try:
                     logger.debug(f"Evaluating cost function for params={p}")
                     measurements = self.get_expectation_values(p, cost_terms)
 
-                    # Simple cost function based on measurements
+                    # Calculate energy using proper quantum expectation values
                     energy = 0.0
                     for coeff, (i, j) in cost_terms:
-                        energy += coeff * ((1 + measurements[i]) * (1 + measurements[j]) / 4)
+                        # Calculate correlation between qubits i and j
+                        energy += coeff * measurements[i] * measurements[j]
 
                     logger.debug(f"Cost function value: {energy}")
                     return float(energy)
@@ -86,10 +87,9 @@ class QAOACircuit:
                     logger.error(f"Error in cost function: {str(e)}", exc_info=True)
                     return float('inf')
 
-            # Scale learning rate and momentum based on problem size
-            base_learning_rate = 0.01  # Reduced base learning rate
-            learning_rate = base_learning_rate * (1.0 / np.log2(self.n_qubits + 1))  # Gentler scaling
-            momentum = 0.5  # Reduced momentum for stability
+            # Use fixed learning rate and momentum for stability
+            learning_rate = 0.1
+            momentum = 0.5
             velocity = np.zeros_like(params)
 
             current_cost = cost_function(params)
@@ -99,14 +99,14 @@ class QAOACircuit:
             best_cost = current_cost
             best_params = params.copy()
             no_improvement_count = 0
-            improvement_threshold = 1e-4  # Relaxed threshold
 
             for step in range(steps):
                 try:
                     logger.debug(f"Optimization step {step+1}/{steps}")
-                    # Compute gradient
+
+                    # Compute gradient using central differences
                     grad = np.zeros(2)
-                    eps = 1e-4  # Fixed epsilon for stability
+                    eps = 1e-3  # Larger epsilon for numerical stability
 
                     for i in range(2):
                         params_plus = params.copy()
@@ -117,46 +117,56 @@ class QAOACircuit:
                         cost_plus = cost_function(params_plus)
                         cost_minus = cost_function(params_minus)
 
-                        grad[i] = (cost_plus - cost_minus) / (2 * eps)
+                        if cost_plus != float('inf') and cost_minus != float('inf'):
+                            grad[i] = (cost_plus - cost_minus) / (2 * eps)
+                        else:
+                            grad[i] = 0  # Skip update if cost computation failed
 
-                    # Update velocity and parameters with momentum
-                    velocity = momentum * velocity - learning_rate * grad
-                    params += velocity
-                    params = self._validate_params(params)
+                    # Gradient norm for stopping condition
+                    grad_norm = np.linalg.norm(grad)
+                    if grad_norm > 1e-8:  # Only update if gradient is significant
+                        # Update velocity and parameters with momentum
+                        velocity = momentum * velocity - learning_rate * (grad / grad_norm)
+                        params += velocity
+                        params = self._validate_params(params)
 
-                    # Compute new cost
-                    new_cost = cost_function(params)
-                    costs.append(new_cost)
+                        # Compute new cost
+                        new_cost = cost_function(params)
+                        costs.append(new_cost)
 
-                    # Update best solution if needed
-                    if new_cost < best_cost - improvement_threshold:
-                        best_cost = new_cost
-                        best_params = params.copy()
-                        no_improvement_count = 0
+                        # Update best solution if improved
+                        if new_cost < best_cost:
+                            best_cost = new_cost
+                            best_params = params.copy()
+                            no_improvement_count = 0
+                        else:
+                            no_improvement_count += 1
+
+                        logger.info(f"Step {step+1}: cost={new_cost:.6f}, params={params}, grad_norm={grad_norm:.6f}")
+
+                        if self.progress_callback:
+                            self.progress_callback(step, {
+                                "status": "Optimizing quantum circuit",
+                                "progress": (step + 1) / steps,
+                                "step": step,
+                                "total_steps": steps,
+                                "cost": float(new_cost)
+                            })
+
                     else:
-                        no_improvement_count += 1
-
-                    # Early stopping if no improvement for many steps
-                    if no_improvement_count > 30:  # Increased patience
-                        logger.info("Early stopping due to no improvement")
+                        logger.info(f"Gradient too small ({grad_norm:.2e}), stopping optimization")
                         break
 
-                    logger.info(f"Step {step+1}: cost={new_cost:.6f}, params={params}")
-
-                    if self.progress_callback:
-                        self.progress_callback(step, {
-                            "status": "Optimizing quantum circuit",
-                            "progress": (step + 1) / steps,
-                            "step": step,
-                            "total_steps": steps,
-                            "cost": float(new_cost)
-                        })
+                    # Early stopping if no improvement
+                    if no_improvement_count > 5:
+                        logger.info("Early stopping due to no improvement")
+                        break
 
                 except Exception as e:
                     logger.error(f"Error in optimization step {step}: {str(e)}", exc_info=True)
                     continue
 
-            logger.info(f"Optimization completed. Final cost: {best_cost:.6f}")
+            logger.info(f"Optimization completed. Best cost: {best_cost:.6f}")
             return best_params, costs
 
         except Exception as e:

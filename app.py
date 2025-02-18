@@ -46,7 +46,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger
 def index():
     try:
         logger.info("Attempting to render index page")
-        return render_template('index.html')
+        return render_template('dashboard.html')
     except Exception as e:
         error_msg = f"Error rendering index: {str(e)}"
         logger.error(error_msg)
@@ -73,8 +73,8 @@ def optimize():
         logger.info(f"Generated filenames: map={map_filename}, png={png_filename}")
 
         def progress_callback(step, update_data):
+            logger.info(f"Progress update - Step {step}: {update_data}")
             try:
-                logger.info(f"Progress update - Step {step}: {update_data}")
                 socketio.emit(
                     f'optimization_progress_{run_id}',
                     {
@@ -86,30 +86,16 @@ def optimize():
                 )
             except Exception as e:
                 logger.error(f"Error in progress callback: {str(e)}")
-                logger.error(traceback.format_exc())
 
         try:
-            # Validate input parameters
-            n_cities = int(data.get('n_cities', 4))
-            n_vehicles = int(data.get('n_vehicles', 1))
-
-            if n_cities < 3 or n_cities > 6:
-                raise ValueError(f"Invalid number of cities: {n_cities}. Must be between 3 and 6.")
-
-            if n_vehicles < 1 or n_vehicles > 3:
-                raise ValueError(f"Invalid number of vehicles: {n_vehicles}. Must be between 1 and 3.")
-
             metrics = benchmark_optimization(
-                n_cities=n_cities,
-                n_vehicles=n_vehicles,
+                n_cities=data.get('n_cities', 4),
+                n_vehicles=data.get('n_vehicles', 1),
                 place_name=data.get('location', 'San Francisco, California, USA'),
                 backend=data.get('backend', 'pennylane'),
                 hybrid=data.get('hybrid', False),
                 progress_callback=progress_callback
             )
-
-            if not metrics:
-                raise ValueError("Optimization failed to return valid metrics")
 
             logger.info(f"Optimization completed successfully with metrics: {metrics}")
 
@@ -119,7 +105,7 @@ def optimize():
 
             logger.info(f"Attempting to save maps to: {map_path} and {png_path}")
 
-            if 'network' in metrics and 'nodes' in metrics and 'routes' in metrics:
+            if 'network' in metrics and 'nodes' in metrics:
                 routes = metrics.get('routes', [])
                 if routes:
                     node_routes = [[metrics['nodes'][i] for i in route] for route in routes]
@@ -127,9 +113,17 @@ def optimize():
                     metrics['network'].create_static_map(node_routes, save_path=png_path)
                     logger.info(f"Successfully generated route maps: {map_filename}")
                 else:
-                    raise ValueError("No valid routes generated during optimization")
+                    logger.error("No routes found in metrics")
+                    return jsonify({
+                        'success': False,
+                        'error': "No valid routes generated during optimization"
+                    }), 500
             else:
-                raise ValueError("Missing required data in optimization results")
+                logger.error("Missing network or nodes in metrics")
+                return jsonify({
+                    'success': False,
+                    'error': "Missing network data in optimization results"
+                }), 500
 
             response_metrics = {
                 'total_time': metrics.get('total_time', 0),
@@ -148,13 +142,6 @@ def optimize():
                 'task_id': run_id
             })
 
-        except ValueError as ve:
-            logger.error(f"Validation error: {str(ve)}")
-            logger.error(traceback.format_exc())
-            return jsonify({
-                'success': False,
-                'error': f"Invalid input: {str(ve)}"
-            }), 400
         except Exception as opt_error:
             logger.error(f"Optimization error: {str(opt_error)}")
             logger.error(traceback.format_exc())

@@ -38,20 +38,18 @@ class QAOACircuit:
                 for layer in range(depth):
                     # Problem unitary
                     gamma = params[2 * layer]
-                    beta = params[2 * layer + 1]
 
-                    # Apply ZZ interactions
+                    # Apply two-qubit ZZ interactions using IsingZZ operation
                     for coeff, (i, j) in valid_terms:
                         try:
-                            # Implement ZZ interaction using rotation gates
-                            qml.CNOT(wires=[i, j])
-                            qml.RZ(2 * gamma * coeff, wires=j)
-                            qml.CNOT(wires=[i, j])
+                            # Use IsingZZ operation instead of CNOT+RZ combination
+                            qml.IsingZZ(gamma * coeff, wires=[i, j])
                         except Exception as e:
-                            logger.error(f"Error applying ZZ interaction between qubits {i} and {j}: {str(e)}")
+                            logger.error(f"Error applying IsingZZ between qubits {i} and {j}: {str(e)}")
                             continue
 
                     # Mixer unitary
+                    beta = params[2 * layer + 1]
                     for i in range(n_qubits):
                         qml.RX(2 * beta, wires=i)
 
@@ -69,6 +67,7 @@ class QAOACircuit:
         """Optimize QAOA parameters."""
         try:
             logger.info("Starting QAOA optimization")
+
             # Initialize parameters for all QAOA layers
             n_params = 2 * self.depth  # gamma and beta for each layer
             params = np.zeros(n_params)

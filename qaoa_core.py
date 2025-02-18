@@ -10,42 +10,46 @@ class QAOACircuit:
     def __init__(self, n_qubits: int, depth: int = 1, progress_callback: Optional[Callable] = None):
         """Initialize QAOA circuit with enhanced partitioning for large qubit counts."""
         try:
-            self.max_partition_size = min(n_qubits, 20)  # Dynamically adjust partition size
             self.n_qubits = n_qubits
             self.depth = depth
             self.progress_callback = progress_callback
 
-            # Calculate optimal number of partitions
+            # Adjust partition size based on total qubits
+            self.max_partition_size = min(25, n_qubits)  # Maximum supported by PennyLane
             self.n_partitions = (n_qubits + self.max_partition_size - 1) // self.max_partition_size
-            total_qubits = n_qubits * n_qubits  # For routing problems
 
-            logger.info(f"Initializing QAOA with {total_qubits} total qubits across {self.n_partitions} partitions")
+            logger.info(f"Initializing QAOA with {n_qubits} qubits across {self.n_partitions} partitions")
             logger.info(f"Each partition will handle up to {self.max_partition_size} qubits")
 
-            if total_qubits > 100:  # Safety check for very large problems
-                logger.warning(f"Large problem size detected: {total_qubits} qubits. This may impact performance.")
+            if n_qubits > 100:  # Safety check for very large problems
+                logger.warning(f"Large problem size detected: {n_qubits} qubits. This may impact performance.")
 
             self.devices = []
             self.circuits = []
+            self.partition_sizes = []  # Store actual sizes of each partition
 
-            if self.progress_callback:
-                self.progress_callback(0, {"status": "Initializing quantum devices", "progress": 0.1})
-
-            # Initialize devices for each partition
             for i in range(self.n_partitions):
                 start_idx = i * self.max_partition_size
                 end_idx = min(start_idx + self.max_partition_size, n_qubits)
                 partition_size = end_idx - start_idx
+                self.partition_sizes.append(partition_size)
 
                 try:
-                    # Create device with optimized settings for statevector simulation
-                    dev = qml.device('default.qubit', wires=partition_size)
+                    logger.info(f"Creating device for partition {i} with {partition_size} qubits")
+                    device_params = {
+                        'name': 'default.qubit',
+                        'wires': partition_size,
+                        'shots': None
+                    }
+                    logger.debug(f"Device parameters for partition {i}: {device_params}")
+
+                    dev = qml.device(**device_params)
+                    logger.info(f"Successfully created device for partition {i}")
                     self.devices.append(dev)
 
-                    # Create QNode with simplified measurement logic
                     @qml.qnode(dev)
                     def circuit(params, cost_terms):
-                        # Prepare initial state
+                        # Initial state preparation
                         for i in range(partition_size):
                             qml.Hadamard(wires=i)
 
@@ -63,11 +67,9 @@ class QAOACircuit:
                         for i in range(partition_size):
                             qml.RX(2 * beta, wires=i)
 
-                        # Return measurements directly without additional wrapping
                         return [qml.expval(qml.PauliZ(i)) for i in range(partition_size)]
 
                     self.circuits.append(circuit)
-                    logger.debug(f"Successfully initialized partition {i} with {partition_size} qubits")
 
                     if self.progress_callback:
                         progress = 0.1 + (0.4 * (i + 1) / self.n_partitions)
@@ -77,47 +79,60 @@ class QAOACircuit:
                         })
 
                 except Exception as e:
-                    logger.error(f"Failed to initialize partition {i}: {str(e)}")
-                    raise
+                    logger.error(f"Failed to initialize partition {i}: {str(e)}", exc_info=True)
+                    raise RuntimeError(f"Device initialization failed for partition {i}: {str(e)}")
 
             logger.info(f"Successfully initialized {self.n_partitions} quantum devices")
 
         except Exception as e:
-            logger.error(f"Failed to initialize quantum devices: {str(e)}")
+            logger.error(f"Failed to initialize quantum devices: {str(e)}", exc_info=True)
             raise
 
     def optimize(self, cost_terms: List[Tuple], **kwargs) -> Tuple[np.ndarray, List[float]]:
         """QAOA optimization with enhanced memory management."""
         try:
-            # Initialize parameters with smaller values for stability
             params = np.array([0.01, 0.1])  # Reduced initial values for better convergence
             logger.info(f"Starting optimization with initial parameters: {params}")
 
             def cost_function(p):
-                """Memory-efficient cost function implementation."""
                 try:
                     measurements = self.get_expectation_values(p, cost_terms)
                     total_cost = 0.0
                     for partition_idx, partition_costs in self._validate_cost_terms(cost_terms).items():
                         start_idx = partition_idx * self.max_partition_size
+                        partition_measurements = measurements[start_idx:start_idx + self.partition_sizes[partition_idx]]
+
                         for coeff, (i, j) in partition_costs:
-                            local_i = i % self.max_partition_size
-                            local_j = j % self.max_partition_size
-                            if local_i < self.max_partition_size and local_j < self.max_partition_size:
-                                total_cost += coeff * measurements[start_idx + local_i] * measurements[start_idx + local_j]
-                    return total_cost
+                            if i < len(partition_measurements) and j < len(partition_measurements):
+                                total_cost += coeff * partition_measurements[i] * partition_measurements[j]
+                    logger.debug(f"Cost function evaluation: params={p}, cost={total_cost}")
+                    return float(total_cost)  # Ensure we return a scalar
                 except Exception as e:
                     logger.error(f"Error in cost function: {str(e)}")
                     return float('inf')
 
             try:
-                # Compute gradient and update parameters
-                grad_fn = qml.grad(cost_function)
+                # Evaluate cost before gradient computation
                 current_cost = cost_function(params)
-                grad = grad_fn(params)
+                logger.info(f"Initial cost: {current_cost}")
 
-                # Update parameters with reduced learning rate
-                new_params = params - 0.01 * np.array(grad)
+                # Compute gradient with error handling
+                try:
+                    grad = qml.grad(cost_function)(params)
+                    if not isinstance(grad, np.ndarray) or grad.size != 2:
+                        logger.error(f"Invalid gradient shape: {grad.shape if hasattr(grad, 'shape') else 'not array'}")
+                        grad = np.zeros(2)
+                except Exception as e:
+                    logger.error(f"Gradient computation failed: {str(e)}", exc_info=True)
+                    grad = np.zeros(2)
+
+                # Update parameters with gradient clipping
+                grad_norm = np.linalg.norm(grad)
+                if grad_norm > 1.0:
+                    grad = grad / grad_norm
+
+                logger.info(f"Gradient: {grad}, Norm: {grad_norm}")
+                new_params = params - 0.01 * grad
                 new_params = self._validate_and_truncate_params(new_params)
 
                 if self.progress_callback:
@@ -131,7 +146,7 @@ class QAOACircuit:
                 return new_params, [current_cost]
 
             except Exception as e:
-                logger.error(f"Error in optimization: {str(e)}")
+                logger.error(f"Error in optimization: {str(e)}", exc_info=True)
                 return np.array([0.0, 0.0]), [float('inf')]
 
         except Exception as e:
@@ -149,40 +164,32 @@ class QAOACircuit:
             logger.info(f"Computing expectation values with gamma={params[0]:.4f}, beta={params[1]:.4f}")
 
             partitioned_terms = self._validate_cost_terms(cost_terms)
-            logger.debug(f"Using {len(partitioned_terms)} partitions for cost terms")
-
             measurements = np.zeros(self.n_qubits)
 
             for partition_idx, partition_costs in partitioned_terms.items():
                 start_idx = partition_idx * self.max_partition_size
-                end_idx = min(start_idx + self.max_partition_size, self.n_qubits)
-                partition_size = end_idx - start_idx
+                partition_size = self.partition_sizes[partition_idx]
 
-                if partition_size > 0 and partition_idx < len(self.circuits):
-                    try:
-                        circuit = self.circuits[partition_idx]
-                        # Execute circuit with direct measurement output
-                        partition_results = circuit(params, partition_costs)
-                        # Store results without additional array operations
-                        measurements[start_idx:end_idx] = partition_results
+                try:
+                    circuit = self.circuits[partition_idx]
+                    partition_results = circuit(params, partition_costs)
+                    measurements[start_idx:start_idx + partition_size] = partition_results
 
-                        if self.progress_callback:
-                            progress = 0.6 + (0.2 * (partition_idx + 1) / len(partitioned_terms))
-                            self.progress_callback(partition_idx, {
-                                "status": f"Computing partition {partition_idx + 1}/{len(partitioned_terms)}",
-                                "progress": progress,
-                                "measurements": measurements.tolist()
-                            })
+                    if self.progress_callback:
+                        progress = 0.6 + (0.2 * (partition_idx + 1) / len(partitioned_terms))
+                        self.progress_callback(partition_idx, {
+                            "status": f"Computing partition {partition_idx + 1}/{len(partitioned_terms)}",
+                            "progress": progress
+                        })
 
-                    except Exception as e:
-                        logger.error(f"Error in partition {partition_idx}: {str(e)}")
-                        measurements[start_idx:end_idx] = np.zeros(partition_size)
+                except Exception as e:
+                    logger.error(f"Error in partition {partition_idx}: {str(e)}", exc_info=True)
+                    measurements[start_idx:start_idx + partition_size] = np.zeros(partition_size)
 
-            logger.debug(f"Final measurements shape: {measurements.shape}")
             return measurements
 
         except Exception as e:
-            logger.error(f"Error getting expectation values: {str(e)}")
+            logger.error(f"Error getting expectation values: {str(e)}", exc_info=True)
             raise
 
     def _validate_and_truncate_params(self, params: np.ndarray) -> np.ndarray:
@@ -199,7 +206,6 @@ class QAOACircuit:
             else:
                 params = params[:2]
 
-        # Tighter parameter bounds for stability
         params[0] = np.clip(params[0], -np.pi, np.pi)      # gamma
         params[1] = np.clip(params[1], -np.pi/2, np.pi/2)  # beta
 
@@ -211,16 +217,15 @@ class QAOACircuit:
 
         if not cost_terms:
             logger.warning("Empty cost terms provided")
-            return {0: [(1.0, (0, min(1, self.max_partition_size-1)))]}
-
-        coeffs = [abs(coeff) for coeff, _ in cost_terms]
-        max_coeff = max(coeffs) if coeffs else 1.0
+            return {0: [(1.0, (0, 1))]}
 
         # Initialize all partitions
         for i in range(self.n_partitions):
             partitioned_terms[i] = []
 
-        # Process and assign terms to partitions
+        coeffs = [abs(coeff) for coeff, _ in cost_terms]
+        max_coeff = max(coeffs) if coeffs else 1.0
+
         for coeff, (i, j) in cost_terms:
             partition_i = i // self.max_partition_size
             partition_j = j // self.max_partition_size
@@ -232,9 +237,10 @@ class QAOACircuit:
                 local_i = i % self.max_partition_size
                 local_j = j % self.max_partition_size
 
-                # Normalize coefficients for numerical stability
-                norm_coeff = coeff / max_coeff if max_coeff > 0 else coeff
-                partitioned_terms[partition_i].append((norm_coeff, (local_i, local_j)))
+                # Check if indices are within partition size
+                if local_i < self.partition_sizes[partition_i] and local_j < self.partition_sizes[partition_i]:
+                    norm_coeff = coeff / max_coeff if max_coeff > 0 else coeff
+                    partitioned_terms[partition_i].append((norm_coeff, (local_i, local_j)))
 
         logger.debug(f"Partitioned {len(cost_terms)} cost terms into {len(partitioned_terms)} groups")
         return partitioned_terms

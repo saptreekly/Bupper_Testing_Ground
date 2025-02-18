@@ -37,13 +37,13 @@ class QAOACircuit:
 
                 try:
                     logger.info(f"Creating device for partition {i} with {partition_size} qubits")
-                    # Set shots=None explicitly for analytic mode and use lightning.qubit for better performance
-                    dev = qml.device('lightning.qubit', wires=partition_size)
+                    # Set shots=None explicitly for analytic mode
+                    dev = qml.device('default.qubit', wires=partition_size, shots=None)
                     self.devices.append(dev)
 
                     # Create circuit function factory that captures cost_terms
                     def create_circuit(dev, partition_size, partition_cost_terms):
-                        @qml.qnode(dev, diff_method="parameter-shift")
+                        @qml.qnode(dev, interface="autograd")  # Specify autograd interface for better compatibility
                         def circuit(params):
                             # Initial state preparation
                             for i in range(partition_size):
@@ -63,7 +63,7 @@ class QAOACircuit:
                             for i in range(partition_size):
                                 qml.RX(2 * beta, wires=i)
 
-                            # Return expectation values without passing extra parameters
+                            # Return expectation values
                             return [qml.expval(qml.PauliZ(i)) for i in range(partition_size)]
 
                         return circuit

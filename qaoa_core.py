@@ -78,7 +78,7 @@ class QAOACircuit:
                     # Simple cost function based on measurements
                     energy = 0.0
                     for coeff, (i, j) in cost_terms:
-                        energy += coeff * measurements[i] * measurements[j]
+                        energy += coeff * ((1 + measurements[i]) * (1 + measurements[j]) / 4)
 
                     logger.debug(f"Cost function value: {energy}")
                     return float(energy)

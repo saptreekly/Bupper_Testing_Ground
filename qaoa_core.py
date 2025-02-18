@@ -28,9 +28,11 @@ class QAOACircuit:
                 for layer in range(depth):
                     # Problem unitary with ZZ interactions
                     for coeff, (i, j) in cost_terms:
-                        qml.CNOT(wires=[i, j])
-                        qml.RZ(2 * params[2*layer] * coeff, wires=j)
-                        qml.CNOT(wires=[i, j])
+                        if i != j:  # Only apply if qubits are different
+                            # Implement ZZ interaction using native gates
+                            qml.CNOT(wires=[i, j])
+                            qml.RZ(2 * params[2*layer] * coeff, wires=j)
+                            qml.CNOT(wires=[i, j])
 
                     # Mixer unitary
                     for i in range(n_qubits):
@@ -58,14 +60,19 @@ class QAOACircuit:
                 params[2*i] = 0.1  # gamma
                 params[2*i + 1] = np.pi/4  # beta
 
+            # Filter out invalid cost terms (where i == j)
+            valid_cost_terms = [(coeff, (i, j)) for coeff, (i, j) in cost_terms if i != j]
+            if not valid_cost_terms:
+                raise ValueError("No valid cost terms found after filtering")
+
             costs = []
             steps = kwargs.get('steps', 10)
 
             def cost_function(p):
                 try:
-                    measurements = self.get_expectation_values(p, cost_terms)
+                    measurements = self.get_expectation_values(p, valid_cost_terms)
                     energy = 0.0
-                    for coeff, (i, j) in cost_terms:
+                    for coeff, (i, j) in valid_cost_terms:
                         # Calculate ZZ correlation
                         energy += coeff * measurements[i] * measurements[j]
                     return float(energy)

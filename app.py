@@ -315,7 +315,7 @@ def optimize():
 
 if __name__ == '__main__':
     try:
-        port = 3000
+        port = 5000  # Changed from 3000 to 5000
         max_retries = 3
         retry_count = 0
 
@@ -326,16 +326,21 @@ if __name__ == '__main__':
 
             if not is_port_in_use(port):
                 logger.info(f"Starting Flask server with SocketIO on port {port}")
-                socketio.run(
-                    app,
-                    host='0.0.0.0',
-                    port=port,
-                    debug=True,
-                    use_reloader=False,  # Disable reloader to prevent conflicts
-                    allow_unsafe_werkzeug=True,
-                    log_output=True
-                )
-                break
+                try:
+                    socketio.run(
+                        app,
+                        host='0.0.0.0',
+                        port=port,
+                        debug=True,
+                        use_reloader=False,  # Disable reloader to prevent conflicts
+                        allow_unsafe_werkzeug=True,
+                        log_output=True
+                    )
+                    break
+                except Exception as run_error:
+                    logger.error(f"Error starting server on port {port}: {str(run_error)}")
+                    logger.error(traceback.format_exc())
+                    raise
 
             retry_count += 1
             logger.warning(f"Port {port} still in use after cleanup attempt {retry_count}")

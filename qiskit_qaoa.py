@@ -12,14 +12,12 @@ from qiskit.circuit.library import QFT
 logger = logging.getLogger(__name__)
 
 class QiskitQAOA:
-    """QAOA implementation using Qiskit backend with improved scalability."""
-
     def __init__(self, n_qubits: int, depth: int = 1):
-        """Initialize QAOA circuit with advanced depth adaptation and circuit decomposition."""
+        """Initialize QAOA circuit with fixed 2-parameter system."""
         try:
             self.n_qubits = n_qubits
-            self.depth = depth
-            logger.info(f"Initializing QiskitQAOA with {n_qubits} qubits and depth {depth}")
+            self.depth = 1  # Force depth to 1 to maintain 2-parameter system
+            logger.info(f"Initializing QiskitQAOA with {n_qubits} qubits and fixed depth 1")
 
             # Initialize backend with optimized configuration
             self.backend = AerSimulator()
@@ -49,10 +47,15 @@ class QiskitQAOA:
             raise
 
     def get_expectation_values(self, params, cost_terms):
-        """Get expectation values with enhanced error handling and logging."""
+        """Get expectation values with strict 2-parameter handling."""
         try:
-            logger.info("Starting expectation value calculation")
-            logger.debug(f"Input parameters: {params}")
+            # Ensure we have exactly 2 parameters
+            if len(params) != 2:
+                logger.warning(f"Received {len(params)} parameters, using only first 2")
+                params = params[:2]
+
+            gamma, beta = params
+            logger.info(f"Computing expectation values with gamma={gamma:.4f}, beta={beta:.4f}")
 
             circuit = self._create_qaoa_circuit(params, cost_terms)
             if circuit is None:
@@ -90,16 +93,15 @@ class QiskitQAOA:
             return [0.0] * self.n_qubits
 
     def _create_qaoa_circuit(self, params, cost_terms):
-        """Create QAOA circuit with improved parameter handling."""
+        """Create QAOA circuit with strict 2-parameter handling."""
         try:
             if not cost_terms:
                 logger.warning("No valid cost terms available")
                 return None
 
-            # Always expect exactly 2 parameters (gamma, beta) regardless of depth
+            # Always use exactly 2 parameters (gamma, beta)
             if len(params) != 2:
                 logger.error(f"Parameter validation failed: expected 2 parameters, got {len(params)}")
-                logger.error(f"Received parameters: {params}")
                 return None
 
             gamma, beta = params[0], params[1]
@@ -112,21 +114,14 @@ class QiskitQAOA:
             logger.debug("Preparing initial state")
             self._prepare_initial_state(circuit)
 
-            # QAOA layers with fixed parameter count
-            for p in range(self.depth):
-                logger.debug(f"Building QAOA layer {p+1}/{self.depth}")
+            # Single QAOA layer with fixed parameter count
+            logger.debug(f"Building QAOA layer with depth {self.depth}")
 
-                # Use the same gamma and beta for all layers
-                gamma_p = np.clip(gamma, -2*np.pi, 2*np.pi)
-                beta_p = np.clip(beta, -np.pi, np.pi)
+            # Apply cost Hamiltonian
+            self._apply_cost_hamiltonian(circuit, gamma, cost_terms)
 
-                logger.debug(f"Layer {p+1} parameters - gamma: {gamma_p:.4f}, beta: {beta_p:.4f}")
-
-                # Apply cost Hamiltonian
-                self._apply_cost_hamiltonian(circuit, gamma_p, cost_terms)
-
-                # Apply mixer Hamiltonian
-                self._apply_mixer_hamiltonian(circuit, beta_p)
+            # Apply mixer Hamiltonian
+            self._apply_mixer_hamiltonian(circuit, beta)
 
             logger.info(f"Successfully created QAOA circuit with {circuit.depth()} depth")
             return circuit
@@ -177,6 +172,95 @@ class QiskitQAOA:
             batch = range(i, min(i + batch_size, circuit.num_qubits))
             circuit.h(batch)
 
+    def optimize(self, cost_terms, steps=100, callback=None):
+        """Optimize the QAOA circuit parameters with fixed 2-parameter system."""
+        try:
+            # Initialize parameters for single-layer QAOA
+            gamma = np.random.uniform(-np.pi/8, np.pi/8)  # Initial gamma
+            beta = np.pi/4 + np.random.uniform(-np.pi/8, np.pi/8)  # Initial beta
+            params = np.array([gamma, beta])
+
+            logger.info(f"Initial parameters: gamma={gamma:.4f}, beta={beta:.4f}")
+
+            costs = []
+            best_params = None
+            best_cost = float('inf')
+            no_improvement_count = 0
+            min_improvement = 1e-4
+
+            def cost_function(p):
+                """Compute cost with error handling."""
+                try:
+                    measurements = self.get_expectation_values(p[:2], cost_terms)  # Use only first 2 parameters
+                    cost = sum(coeff * measurements[i] * measurements[j]
+                             for coeff, (i, j) in cost_terms)
+                    return float(cost)
+                except Exception as e:
+                    logger.error(f"Error in cost function: {str(e)}")
+                    return float('inf')
+
+            # Optimize with adaptive learning rate
+            alpha = 0.1  # Initial learning rate
+            alpha_decay = 0.995
+            alpha_min = 0.01
+
+            for step in range(steps):
+                try:
+                    current_cost = cost_function(params)
+                    costs.append(current_cost)
+
+                    if callback:
+                        callback(step, current_cost)
+
+                    if current_cost < best_cost:
+                        improvement = (best_cost - current_cost) / abs(best_cost) if best_cost != float('inf') else 1.0
+                        if improvement > min_improvement:
+                            best_cost = current_cost
+                            best_params = params.copy()
+                            no_improvement_count = 0
+                            logger.info(f"Step {step}: New best cost = {current_cost:.6f}")
+                        else:
+                            no_improvement_count += 1
+                    else:
+                        no_improvement_count += 1
+
+                    if no_improvement_count >= 20:
+                        logger.info(f"Early stopping at step {step}")
+                        break
+
+                    # Compute gradient with error handling
+                    eps = max(1e-4, alpha * 0.1)
+                    grad = np.zeros(2)  # Only compute gradient for 2 parameters
+                    for i in range(2):
+                        params_plus = params.copy()
+                        params_plus[i] += eps
+                        cost_plus = cost_function(params_plus)
+                        if cost_plus != float('inf'):
+                            grad[i] = (cost_plus - current_cost) / eps
+
+                    # Update parameters with bounded values
+                    grad_norm = np.linalg.norm(grad)
+                    if grad_norm > 1.0:
+                        grad = grad / grad_norm
+
+                    params -= alpha * grad
+                    params[0] = np.clip(params[0], -2*np.pi, 2*np.pi)  # gamma
+                    params[1] = np.clip(params[1], -np.pi, np.pi)    # beta
+
+                    alpha = max(alpha_min, alpha * alpha_decay)
+
+                except Exception as e:
+                    logger.error(f"Error in optimization step {step}: {str(e)}")
+                    continue
+
+            final_params = best_params if best_params is not None else params
+            logger.info(f"Optimization complete with final parameters: gamma={final_params[0]:.4f}, beta={final_params[1]:.4f}")
+            return final_params, costs
+
+        except Exception as e:
+            logger.error(f"Error during optimization: {str(e)}")
+            raise
+
     def _add_cross_partition_interactions(self, circuit, params, cost_terms):
         """Add minimal necessary interactions between partitions."""
         try:
@@ -190,7 +274,7 @@ class QiskitQAOA:
             if cross_terms:
                 # Use only first layer parameters for cross terms to reduce circuit depth
                 gamma = params[0]  
-                
+
                 # Sort terms by coefficient magnitude and limit the number of cross-terms
                 cross_terms.sort(key=lambda x: abs(x[0]), reverse=True)
                 max_cross_terms = min(len(cross_terms), self.n_qubits)  # Limit cross-terms
@@ -407,146 +491,6 @@ class QiskitQAOA:
 
         logger.info(f"Validated {len(valid_terms)} cost terms")
         return valid_terms
-
-    def optimize(self, cost_terms, steps=100, callback=None):
-        """Optimize the QAOA circuit parameters with improved convergence."""
-        try:
-            # Validate and normalize cost terms
-            valid_terms = self._validate_cost_terms(cost_terms)
-            if not valid_terms:
-                valid_terms = [(1.0, (0, min(1, self.n_qubits-1)))]
-
-            # Initialize parameters with improved strategy
-            params = []
-            for _ in range(self.depth):
-                params.extend([
-                    np.random.uniform(-np.pi/8, np.pi/8),  # gamma
-                    np.pi/4 + np.random.uniform(-np.pi/8, np.pi/8)  # beta
-                ])
-            params = np.array(params)
-            logger.info(f"Initial parameters: {params}")
-
-            costs = []
-            best_params = None
-            best_cost = float('inf')
-            no_improvement_count = 0
-            min_improvement = 1e-4  # Minimum relative improvement threshold
-
-            def cost_function(p):
-                """Compute cost with error handling."""
-                try:
-                    measurements = self.get_expectation_values(p, valid_terms)
-                    cost = sum(coeff * measurements[i] * measurements[j]
-                             for coeff, (i, j) in valid_terms)
-                    return float(cost)
-                except Exception as e:
-                    logger.error(f"Error in cost function: {str(e)}")
-                    return float('inf')
-
-            # Optimize with adaptive learning rate and momentum
-            alpha = 0.1  # Initial learning rate
-            alpha_decay = 0.995  # Learning rate decay
-            alpha_min = 0.01  # Minimum learning rate
-            momentum = np.zeros_like(params)
-            beta1 = 0.9  # Momentum coefficient
-
-            # Keep track of parameter history for convergence check
-            param_history = []
-            cost_history = []
-
-            initial_cost = cost_function(params)
-            if callback:
-                callback(0, initial_cost)
-
-            for step in range(steps):
-                try:
-                    current_cost = cost_function(params)
-                    costs.append(current_cost)
-                    cost_history.append(current_cost)
-                    param_history.append(params.copy())
-
-                    # Call the callback function with detailed status
-                    if callback:
-                        progress_data = {
-                            "step": step,
-                            "total_steps": steps,
-                            "cost": current_cost,
-                            "best_cost": best_cost if best_cost != float('inf') else current_cost,
-                            "progress": step / steps,
-                            "learning_rate": alpha
-                        }
-                        callback(step, progress_data)
-
-                    if current_cost < best_cost:
-                        improvement = (best_cost - current_cost) / abs(best_cost) if best_cost != float('inf') else 1.0
-                        if improvement > min_improvement:
-                            best_cost = current_cost
-                            best_params = params.copy()
-                            no_improvement_count = 0
-                            logger.info(f"Step {step}: New best cost = {current_cost:.6f} (improved by {improvement:.1%})")
-                        else:
-                            no_improvement_count += 1
-                    else:
-                        no_improvement_count += 1
-
-                    # Adaptive early stopping with multiple criteria
-                    if no_improvement_count >= 20 or (
-                        len(cost_history) > 10 and 
-                        abs(np.mean(cost_history[-5:]) - np.mean(cost_history[-10:-5])) < min_improvement
-                    ):
-                        if callback:
-                            callback(step, current_cost)
-                        logger.info(f"Early stopping at step {step}")
-                        break
-
-                    # Compute gradient with error handling and adaptive step size
-                    eps = max(1e-4, alpha * 0.1)  # Adaptive finite difference step
-                    grad = np.zeros_like(params)
-                    for i in range(len(params)):
-                        try:
-                            params_plus = params.copy()
-                            params_plus[i] += eps
-                            cost_plus = cost_function(params_plus)
-
-                            if cost_plus != float('inf'):
-                                grad[i] = (cost_plus - current_cost) / eps
-                            else:
-                                logger.warning(f"Gradient computation failed for parameter {i}")
-                                grad[i] = 0.0
-                        except Exception as e:
-                            logger.error(f"Error computing gradient for parameter {i}: {str(e)}")
-                            grad[i] = 0.0
-
-                    # Update with momentum and adaptive learning rate
-                    grad_norm = np.linalg.norm(grad)
-                    if grad_norm > 1.0:
-                        grad = grad / grad_norm  # Gradient clipping
-
-                    momentum = beta1 * momentum + (1 - beta1) * grad
-                    params -= alpha * momentum
-
-                    # Bound parameters to prevent instability
-                    params[::2] = np.clip(params[::2], -2*np.pi, 2*np.pi)  # gamma
-                    params[1::2] = np.clip(params[1::2], -np.pi, np.pi)    # beta
-
-                    # Decay learning rate
-                    alpha = max(alpha_min, alpha * alpha_decay)
-
-                except Exception as e:
-                    logger.error(f"Error in optimization step {step}: {str(e)}")
-                    continue
-
-            if best_params is None:
-                logger.warning("Optimization failed to find valid parameters")
-                best_params = params
-
-            logger.info(f"Optimization completed with best cost: {best_cost:.6f}")
-            return best_params, costs
-
-        except Exception as e:
-            logger.error(f"Error during optimization: {str(e)}")
-            raise
-
     def _generate_calibration_circuits(self):
         """Generate calibration circuits for error mitigation."""
         try:

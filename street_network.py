@@ -271,21 +271,24 @@ class StreetNetwork:
                           tiles='cartodbpositron')
 
             # Create a color for each route
-            colors = route_colors or ['#FF0000', '#0000FF', '#00FF00', '#800080', '#FFA500', '#8B0000']
+            colors = route_colors or ['red', 'blue', 'green', 'purple', 'orange']
+            routes_plotted = 0
 
             # Plot each route
             for route_idx, route in enumerate(routes):
+                if not route:  # Skip empty routes
+                    logger.warning(f"Skipping empty route {route_idx+1}")
+                    continue
+
                 color = colors[route_idx % len(colors)]
-                logger.info(f"Plotting route {route_idx+1}/{len(routes)} with nodes: {route}")
+                logger.info(f"Plotting route {route_idx+1}/{len(routes)} with color {color}")
+                routes_plotted += 1
 
                 # Plot path between each consecutive pair of nodes
                 for i in range(len(route)-1):
                     try:
-                        start_node = route[i]
-                        end_node = route[i+1]
-
-                        start_coords = self.get_node_coordinates([start_node])[0]
-                        end_coords = self.get_node_coordinates([end_node])[0]
+                        start_coords = self.get_node_coordinates([route[i]])[0]
+                        end_coords = self.get_node_coordinates([route[i+1]])[0]
 
                         logger.info(f"Getting route from {start_coords} to {end_coords}")
 
@@ -302,7 +305,7 @@ class StreetNetwork:
                             color=color,
                             weight=4,
                             opacity=0.8,
-                            popup=f'Route {route_idx+1}: Node {start_node} → {end_node}'
+                            popup=f'Route {route_idx+1}: Node {route[i]} → {route[i+1]}'
                         ).add_to(m)
 
                         # Add arrow indicators using Folium plugins
@@ -338,7 +341,7 @@ class StreetNetwork:
                         logger.error(traceback.format_exc())
                         continue
 
-            # Add legend
+            # Add legend only for routes that were actually plotted
             legend_html = '''
                 <div style="position: fixed; 
                             bottom: 50px; right: 50px; 
@@ -350,7 +353,7 @@ class StreetNetwork:
                             box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
                     <p style="margin-bottom:5px;"><strong>Routes:</strong></p>
             '''
-            for i in range(len(routes)):
+            for i in range(routes_plotted):
                 color = colors[i % len(colors)]
                 legend_html += f'<p style="margin:5px 0;"><i style="background: {color};width:20px;height:3px;display:inline-block;margin-right:5px;vertical-align:middle;"></i> Route {i+1}</p>'
             legend_html += '</div>'
@@ -404,15 +407,15 @@ class StreetNetwork:
 
                             # Plot the path
                             plt.plot(lons, lats, color=color, linewidth=2, 
-                                   label=f'Route {route_idx+1}' if i == 0 else "", zorder=3)
+                                    label=f'Route {route_idx+1}' if i == 0 else "", zorder=3)
 
                             # Add markers for start and end points
                             if route_idx == 0 and i == 0:  # Depot
                                 plt.plot(lons[0], lats[0], 'r^', markersize=12, 
-                                       label='Depot', zorder=4)
+                                        label='Depot', zorder=4)
                             else:  # Other cities
                                 plt.plot(lons[0], lats[0], 'o', color=color, 
-                                       markersize=8, zorder=4)
+                                        markersize=8, zorder=4)
 
                     except Exception as e:
                         logger.error(f"Error plotting route segment: {str(e)}")

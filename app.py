@@ -226,19 +226,31 @@ def optimize():
                     logger.info(f"Generating map files at: {map_path} and {png_path}")
 
                     # Use different colors for each vehicle's route
-                    route_colors = ['blue', 'red', 'green', 'purple', 'orange']  # Add more colors if needed
-                    colored_routes = [(route, route_colors[i % len(route_colors)]) 
-                                    for i, route in enumerate(node_routes)]
+                    route_colors = ['red', 'blue', 'green', 'purple', 'orange']  # Add more colors if needed
+
+                    # Ensure we have at least n_vehicles routes
+                    if len(node_routes) < n_vehicles:
+                        logger.warning(f"Expected {n_vehicles} routes but only got {len(node_routes)}")
+                        # Pad with empty routes if necessary
+                        while len(node_routes) < n_vehicles:
+                            node_routes.append([])
+
+                    # Create colored routes list
+                    colored_routes = []
+                    for i in range(n_vehicles):
+                        if i < len(node_routes) and node_routes[i]:
+                            colored_routes.append((node_routes[i], route_colors[i % len(route_colors)]))
+                            logger.info(f"Route {i+1} color: {route_colors[i % len(route_colors)]}")
 
                     metrics['network'].create_folium_map(
                         node_routes,
                         save_path=map_path,
-                        route_colors=route_colors[:len(node_routes)]
+                        route_colors=route_colors[:n_vehicles]
                     )
                     metrics['network'].create_static_map(
                         node_routes,
                         save_path=png_path,
-                        route_colors=route_colors[:len(node_routes)]
+                        route_colors=route_colors[:n_vehicles]
                     )
 
                     # Verify files were created

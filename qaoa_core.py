@@ -24,19 +24,36 @@ class QAOACircuit:
                 for i in range(n_qubits):
                     qml.Hadamard(wires=i)
 
+                # Validate cost terms before applying quantum operations
+                valid_terms = []
+                for coeff, (i, j) in cost_terms:
+                    if i != j and 0 <= i < n_qubits and 0 <= j < n_qubits:
+                        valid_terms.append((coeff, (i, j)))
+
+                if not valid_terms:
+                    logger.warning("No valid cost terms found")
+                    return [0.0] * n_qubits
+
                 # QAOA layers
                 for layer in range(depth):
-                    # Problem unitary with ZZ interactions
-                    for coeff, (i, j) in cost_terms:
-                        if i != j:  # Only apply if qubits are different
-                            # Implement ZZ interaction using native gates
+                    # Problem unitary
+                    gamma = params[2 * layer]
+                    beta = params[2 * layer + 1]
+
+                    # Apply ZZ interactions
+                    for coeff, (i, j) in valid_terms:
+                        try:
+                            # Implement ZZ interaction using rotation gates
                             qml.CNOT(wires=[i, j])
-                            qml.RZ(2 * params[2*layer] * coeff, wires=j)
+                            qml.RZ(2 * gamma * coeff, wires=j)
                             qml.CNOT(wires=[i, j])
+                        except Exception as e:
+                            logger.error(f"Error applying ZZ interaction between qubits {i} and {j}: {str(e)}")
+                            continue
 
                     # Mixer unitary
                     for i in range(n_qubits):
-                        qml.RX(2 * params[2*layer + 1], wires=i)
+                        qml.RX(2 * beta, wires=i)
 
                 # Measure all qubits in Z basis
                 return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
@@ -55,13 +72,18 @@ class QAOACircuit:
             # Initialize parameters for all QAOA layers
             n_params = 2 * self.depth  # gamma and beta for each layer
             params = np.zeros(n_params)
-            # Set initial parameters
-            for i in range(self.depth):
-                params[2*i] = 0.1  # gamma
-                params[2*i + 1] = np.pi/4  # beta
 
-            # Filter out invalid cost terms (where i == j)
-            valid_cost_terms = [(coeff, (i, j)) for coeff, (i, j) in cost_terms if i != j]
+            # Set initial parameters with small random values
+            for i in range(self.depth):
+                params[2*i] = np.random.uniform(0.01, 0.1)  # gamma
+                params[2*i + 1] = np.random.uniform(np.pi/8, np.pi/4)  # beta
+
+            # Validate cost terms
+            valid_cost_terms = []
+            for coeff, (i, j) in cost_terms:
+                if i != j and 0 <= i < self.n_qubits and 0 <= j < self.n_qubits:
+                    valid_cost_terms.append((coeff, (i, j)))
+
             if not valid_cost_terms:
                 raise ValueError("No valid cost terms found after filtering")
 
@@ -73,7 +95,6 @@ class QAOACircuit:
                     measurements = self.get_expectation_values(p, valid_cost_terms)
                     energy = 0.0
                     for coeff, (i, j) in valid_cost_terms:
-                        # Calculate ZZ correlation
                         energy += coeff * measurements[i] * measurements[j]
                     return float(energy)
                 except Exception as e:
@@ -87,9 +108,8 @@ class QAOACircuit:
             costs.append(current_cost)
 
             # Optimization parameters
-            learning_rate = 0.1
-            epsilon = 1e-3
-            no_improvement_count = 0
+            learning_rate = 0.05  # Reduced learning rate for stability
+            epsilon = 1e-4  # Smaller epsilon for more precise gradients
 
             for step in range(steps):
                 try:
@@ -123,9 +143,6 @@ class QAOACircuit:
                         if current_cost < best_cost:
                             best_cost = current_cost
                             best_params = params.copy()
-                            no_improvement_count = 0
-                        else:
-                            no_improvement_count += 1
 
                         logger.info(f"Step {step+1}: cost={current_cost:.6f}, grad_norm={grad_norm:.6f}")
 
@@ -138,10 +155,6 @@ class QAOACircuit:
                             })
                     else:
                         logger.info(f"Gradient too small ({grad_norm:.2e}), stopping optimization")
-                        break
-
-                    if no_improvement_count >= 5:
-                        logger.info("Early stopping due to no improvement")
                         break
 
                 except Exception as e:

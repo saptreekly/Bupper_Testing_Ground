@@ -26,11 +26,11 @@ def cleanup_port(port):
     """Attempt to clean up a port that might be in use"""
     try:
         processes_terminated = 0
-        for proc in psutil.process_iter(['pid', 'name', 'connections']):
+        for proc in psutil.process_iter(['pid', 'name']):
             try:
-                # Check each process's connections
-                for conn in proc.connections():
-                    if hasattr(conn, 'laddr') and conn.laddr.port == port:
+                # Get process connections without specifying 'connections' in process_iter
+                for conn in proc.net_connections('inet'):  # Updated to use net_connections
+                    if conn.laddr.port == port:
                         logger.info(f"Found process {proc.pid} using port {port}")
                         proc.terminate()
                         processes_terminated += 1
@@ -72,6 +72,12 @@ except Exception as e:
     logger.error(traceback.format_exc())
     raise
 
+@app.route('/health')
+def health_check():
+    """Simple health check endpoint"""
+    logger.info("Health check endpoint called")
+    return "OK", 200
+
 @app.route('/')
 def index():
     try:
@@ -96,29 +102,21 @@ def serve_static(filename):
 
 if __name__ == '__main__':
     try:
-        port = 5000
+        port = 8080
         max_retries = 3
         retry_count = 0
 
-        while retry_count < max_retries:
-            if is_port_in_use(port):
-                logger.info(f"Port {port} is in use, attempting to clean up...")
-                if cleanup_port(port):
-                    logger.info(f"Successfully cleaned up port {port}")
-                    break
-                retry_count += 1
-                logger.warning(f"Failed to clean up port {port}, attempt {retry_count}/{max_retries}")
-                time.sleep(2)
-            else:
-                break
-
-        if retry_count >= max_retries:
-            raise RuntimeError(f"Could not free up port {port} after {max_retries} attempts")
+        # Initial port cleanup
+        if is_port_in_use(port):
+            logger.info(f"Port {port} is in use, attempting cleanup before start")
+            if not cleanup_port(port):
+                logger.error(f"Failed to clean up port {port}")
+                raise RuntimeError(f"Could not free up port {port}")
 
         logger.info(f"Starting Flask server on port {port}")
         logger.info(f"Static folder: {static_dir}")
         logger.info(f"Templates folder: {templates_dir}")
-        app.run(host='0.0.0.0', port=port, debug=True)
+        app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)  # Disabled reloader
     except Exception as e:
         logger.error(f"Failed to start server: {str(e)}")
         logger.error(traceback.format_exc())

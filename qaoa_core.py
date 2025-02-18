@@ -88,9 +88,10 @@ class QAOACircuit:
                     logger.error(f"Error in cost function: {str(e)}", exc_info=True)
                     return float('inf')
 
-            # Improved gradient descent with momentum
-            learning_rate = 0.05
-            momentum = 0.9
+            # Scale learning rate and momentum based on problem size
+            base_learning_rate = 0.05
+            learning_rate = base_learning_rate / np.sqrt(self.n_qubits)
+            momentum = max(0.5, 0.9 - 0.1 * (self.n_qubits / 16))
             velocity = np.zeros_like(params)
 
             current_cost = cost_function(params)
@@ -99,13 +100,15 @@ class QAOACircuit:
 
             best_cost = current_cost
             best_params = params.copy()
+            no_improvement_count = 0
+            improvement_threshold = 1e-6
 
             for step in range(steps):
                 try:
                     logger.debug(f"Optimization step {step+1}/{steps}")
                     # Compute gradient
                     grad = np.zeros(2)
-                    eps = 1e-4
+                    eps = max(1e-4, 1e-6 * np.sqrt(self.n_qubits))  # Scale epsilon with problem size
 
                     for i in range(2):
                         params_plus = params.copy()
@@ -128,9 +131,17 @@ class QAOACircuit:
                     costs.append(new_cost)
 
                     # Update best solution if needed
-                    if new_cost < best_cost:
+                    if new_cost < best_cost - improvement_threshold:
                         best_cost = new_cost
                         best_params = params.copy()
+                        no_improvement_count = 0
+                    else:
+                        no_improvement_count += 1
+
+                    # Early stopping if no improvement for many steps
+                    if no_improvement_count > 20:
+                        logger.info("Early stopping due to no improvement")
+                        break
 
                     logger.info(f"Step {step+1}: cost={new_cost:.6f}, params={params}")
 

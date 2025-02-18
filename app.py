@@ -63,6 +63,8 @@ def optimize():
             logger.error("No data provided in optimization request")
             return jsonify({"success": False, "error": "No data provided"}), 400
 
+        logger.info(f"Processing optimization request with parameters: {data}")
+
         # Generate unique filenames for this optimization
         run_id = str(uuid.uuid4())[:8]
         map_filename = f'route_maps/route_map_{run_id}.html'
@@ -95,6 +97,8 @@ def optimize():
                 progress_callback=progress_callback
             )
 
+            logger.info(f"Optimization completed successfully with metrics: {metrics}")
+
             # Save map files
             map_path = os.path.join(static_dir, map_filename)
             png_path = os.path.join(static_dir, png_filename)
@@ -112,17 +116,6 @@ def optimize():
                     logger.error("No routes found in metrics")
             else:
                 logger.error("Missing network or nodes in metrics")
-
-            # Verify files exist after creation
-            if not os.path.exists(map_path):
-                logger.error(f"Map file was not created at {map_path}")
-                return jsonify({
-                    'success': False,
-                    'error': "Failed to generate route map"
-                }), 500
-
-            if not os.path.exists(png_path):
-                logger.error(f"PNG file was not created at {png_path}")
 
             response_metrics = {
                 'total_time': metrics.get('total_time', 0),

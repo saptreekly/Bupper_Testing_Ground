@@ -511,6 +511,7 @@
             const form = e.target;
             const formData = {
                 n_cities: parseInt(form.n_cities.value),
+                n_vehicles: 1,  // Default to 1 vehicle for now
                 backend: form.backend.value,
                 location: form.location.value,
                 hybrid: form.hybrid.checked
@@ -525,6 +526,10 @@
                     },
                     body: JSON.stringify(formData)
                 });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
 
                 const data = await response.json();
                 console.log('Optimization response:', data);

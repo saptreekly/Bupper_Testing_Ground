@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 static_dir = os.path.join(current_dir, 'static')
 templates_dir = os.path.join(current_dir, 'templates')
+route_maps_dir = os.path.join(static_dir, 'route_maps')
 
-for directory in [static_dir, templates_dir]:
+for directory in [static_dir, templates_dir, route_maps_dir]:
     if not os.path.exists(directory):
         try:
             os.makedirs(directory)
@@ -52,36 +53,28 @@ def optimize():
             logger.error("No data provided in optimization request")
             return jsonify({"success": False, "error": "No data provided"}), 400
 
-        n_cities = data.get('n_cities', 4)
-        n_vehicles = data.get('n_vehicles', 1)
-        location = data.get('location', 'San Francisco, California, USA')
-        backend = data.get('backend', 'pennylane')
-        hybrid = data.get('hybrid', False)
-
-        logger.info(f"Optimization parameters: cities={n_cities}, vehicles={n_vehicles}, "
-                   f"location={location}, backend={backend}, hybrid={hybrid}")
-
         # Generate unique filenames for this optimization
         run_id = str(uuid.uuid4())[:8]
-        map_filename = f'route_map_{run_id}.html'
-        png_filename = f'route_map_{run_id}.png'
+        map_filename = f'route_maps/route_map_{run_id}.html'
+        png_filename = f'route_maps/route_map_{run_id}.png'
 
-        def progress_callback(step, data):
-            logger.info(f"Optimization progress - Step {step}: {data}")
+        logger.info(f"Generated filenames: map={map_filename}, png={png_filename}")
 
         try:
             metrics = benchmark_optimization(
-                n_cities=n_cities,
-                n_vehicles=n_vehicles,
-                place_name=location,
-                backend=backend,
-                hybrid=hybrid,
-                progress_callback=progress_callback
+                n_cities=data.get('n_cities', 4),
+                n_vehicles=data.get('n_vehicles', 1),
+                place_name=data.get('location', 'San Francisco, California, USA'),
+                backend=data.get('backend', 'pennylane'),
+                hybrid=data.get('hybrid', False),
+                progress_callback=lambda step, data: logger.info(f"Optimization progress - Step {step}: {data}")
             )
 
             # Save map files
             map_path = os.path.join(static_dir, map_filename)
             png_path = os.path.join(static_dir, png_filename)
+
+            logger.info(f"Attempting to save maps to: {map_path} and {png_path}")
 
             if 'network' in metrics and 'nodes' in metrics:
                 routes = metrics.get('routes', [])
@@ -90,8 +83,17 @@ def optimize():
                     metrics['network'].create_folium_map(node_routes, save_path=map_path)
                     metrics['network'].create_static_map(node_routes, save_path=png_path)
                     logger.info(f"Successfully generated route maps: {map_filename}")
+                else:
+                    logger.error("No routes found in metrics")
+            else:
+                logger.error("Missing network or nodes in metrics")
 
-            # Clean up metrics for JSON response
+            # Verify files exist
+            if not os.path.exists(map_path):
+                logger.error(f"Map file was not created at {map_path}")
+            if not os.path.exists(png_path):
+                logger.error(f"PNG file was not created at {png_path}")
+
             response_metrics = {
                 'total_time': metrics.get('total_time', 0),
                 'solution_length': metrics.get('solution_length', 0),
@@ -135,7 +137,7 @@ def serve_static(filename):
 
 if __name__ == '__main__':
     try:
-        port = 3000
+        port = int(os.environ.get('PORT', 3000))
         logger.info(f"Starting Flask server on port {port}")
         app.run(
             host='0.0.0.0',

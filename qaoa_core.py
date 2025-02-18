@@ -40,8 +40,8 @@ class QAOACircuit:
                     dev = qml.device('default.qubit', wires=partition_size, shots=None)
                     self.devices.append(dev)
 
-                    # Create circuit with cost_terms as closure
-                    def create_circuit(partition_cost_terms):
+                    # Create circuit function factory that captures cost_terms
+                    def create_circuit(dev, partition_size, partition_cost_terms):
                         @qml.qnode(dev)
                         def circuit(params):
                             # Initial state preparation
@@ -67,7 +67,8 @@ class QAOACircuit:
 
                         return circuit
 
-                    self.circuits.append(create_circuit)
+                    # Store circuit creation function
+                    self.circuits.append(lambda cost_terms: create_circuit(dev, partition_size, cost_terms))
                     logger.info(f"Successfully created circuit for partition {i}")
 
                 except Exception as e:
@@ -90,8 +91,9 @@ class QAOACircuit:
                 partition_size = self.partition_sizes[partition_idx]
 
                 try:
-                    # Create circuit with specific cost terms
+                    # Create circuit with captured cost terms
                     circuit = self.circuits[partition_idx](partition_costs)
+                    # Execute with only params
                     partition_results = circuit(params)
                     measurements[start_idx:start_idx + partition_size] = partition_results
 

@@ -118,10 +118,10 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python example.py --cities 3"
+args = "python example.py --cities 5 --vehicles 1"
 
 [deployment]
-run = ["sh", "-c", "python example.py --cities 3"]
+run = ["sh", "-c", "python example.py --cities 5 --vehicles 1"]
 
 [[ports]]
 localPort = 3000

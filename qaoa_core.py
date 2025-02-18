@@ -19,27 +19,24 @@ class QAOACircuit:
 
             @qml.qnode(self.dev)
             def circuit(params, cost_terms):
-                logger.debug(f"Executing circuit with params={params}")
-                # Initial state preparation
+                """Create and execute the QAOA circuit."""
+                # Initial state preparation - equal superposition
                 for i in range(n_qubits):
                     qml.Hadamard(wires=i)
 
-                gamma, beta = params
-
-                # Cost Hamiltonian
-                logger.debug("Applying cost Hamiltonian")
-                for coeff, (i, j) in cost_terms:
-                    if i != j:
+                # QAOA layers
+                for layer in range(depth):
+                    # Problem unitary with ZZ interactions
+                    for coeff, (i, j) in cost_terms:
                         qml.CNOT(wires=[i, j])
-                        qml.RZ(2 * gamma * coeff, wires=j)
+                        qml.RZ(2 * params[2*layer] * coeff, wires=j)
                         qml.CNOT(wires=[i, j])
 
-                # Mixer Hamiltonian
-                logger.debug("Applying mixer Hamiltonian")
-                for i in range(n_qubits):
-                    qml.RX(2 * beta, wires=i)
+                    # Mixer unitary
+                    for i in range(n_qubits):
+                        qml.RX(2 * params[2*layer + 1], wires=i)
 
-                logger.debug("Measuring expectation values")
+                # Measure all qubits in Z basis
                 return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
 
             self.circuit = circuit
@@ -49,116 +46,94 @@ class QAOACircuit:
             logger.error(f"Failed to initialize QAOA circuit: {str(e)}", exc_info=True)
             raise
 
-    def get_expectation_values(self, params: np.ndarray, cost_terms: List[Tuple]) -> np.ndarray:
-        """Compute expectation values."""
-        try:
-            logger.debug(f"Computing expectation values with params={params}")
-            params = self._validate_params(params)
-            result = self.circuit(params, cost_terms)
-            logger.debug(f"Expectation values computed: {result}")
-            return result
-        except Exception as e:
-            logger.error(f"Error computing expectation values: {str(e)}", exc_info=True)
-            raise
-
     def optimize(self, cost_terms: List[Tuple], **kwargs) -> Tuple[np.ndarray, List[float]]:
         """Optimize QAOA parameters."""
         try:
             logger.info("Starting QAOA optimization")
-            # Initialize parameters with slightly randomized values
-            params = np.array([0.01, np.pi/4])  # Start with simpler initial values
+            # Initialize parameters for all QAOA layers
+            n_params = 2 * self.depth  # gamma and beta for each layer
+            params = np.zeros(n_params)
+            # Set initial parameters
+            for i in range(self.depth):
+                params[2*i] = 0.1  # gamma
+                params[2*i + 1] = np.pi/4  # beta
+
             costs = []
-            steps = kwargs.get('steps', 10)  # Default to 10 steps
+            steps = kwargs.get('steps', 10)
 
             def cost_function(p):
                 try:
-                    logger.debug(f"Evaluating cost function for params={p}")
                     measurements = self.get_expectation_values(p, cost_terms)
-
-                    # Calculate energy using proper quantum expectation values
                     energy = 0.0
                     for coeff, (i, j) in cost_terms:
-                        # Calculate correlation between qubits i and j
+                        # Calculate ZZ correlation
                         energy += coeff * measurements[i] * measurements[j]
-
-                    logger.debug(f"Cost function value: {energy}")
                     return float(energy)
                 except Exception as e:
                     logger.error(f"Error in cost function: {str(e)}", exc_info=True)
                     return float('inf')
 
-            # Use fixed learning rate and momentum for stability
-            learning_rate = 0.1
-            momentum = 0.5
-            velocity = np.zeros_like(params)
-
+            # Initial cost
             current_cost = cost_function(params)
-            costs.append(current_cost)
-            logger.info(f"Initial cost: {current_cost}")
-
             best_cost = current_cost
             best_params = params.copy()
+            costs.append(current_cost)
+
+            # Optimization parameters
+            learning_rate = 0.1
+            epsilon = 1e-3
             no_improvement_count = 0
 
             for step in range(steps):
                 try:
-                    logger.debug(f"Optimization step {step+1}/{steps}")
-
-                    # Compute gradient using central differences
-                    grad = np.zeros(2)
-                    eps = 1e-3  # Larger epsilon for numerical stability
-
-                    for i in range(2):
+                    # Compute gradient using finite differences
+                    grad = np.zeros(n_params)
+                    for i in range(n_params):
                         params_plus = params.copy()
-                        params_plus[i] += eps
+                        params_plus[i] += epsilon
                         params_minus = params.copy()
-                        params_minus[i] -= eps
+                        params_minus[i] -= epsilon
 
                         cost_plus = cost_function(params_plus)
                         cost_minus = cost_function(params_minus)
 
                         if cost_plus != float('inf') and cost_minus != float('inf'):
-                            grad[i] = (cost_plus - cost_minus) / (2 * eps)
-                        else:
-                            grad[i] = 0  # Skip update if cost computation failed
+                            grad[i] = (cost_plus - cost_minus) / (2 * epsilon)
 
-                    # Gradient norm for stopping condition
+                    # Update parameters using gradient descent
                     grad_norm = np.linalg.norm(grad)
-                    if grad_norm > 1e-8:  # Only update if gradient is significant
-                        # Update velocity and parameters with momentum
-                        velocity = momentum * velocity - learning_rate * (grad / grad_norm)
-                        params += velocity
-                        params = self._validate_params(params)
+                    if grad_norm > 1e-8:
+                        params -= learning_rate * (grad / grad_norm)
 
-                        # Compute new cost
-                        new_cost = cost_function(params)
-                        costs.append(new_cost)
+                        # Ensure parameters stay in reasonable ranges
+                        for i in range(self.depth):
+                            params[2*i] = np.clip(params[2*i], -2*np.pi, 2*np.pi)  # gamma
+                            params[2*i + 1] = np.clip(params[2*i + 1], -np.pi, np.pi)  # beta
 
-                        # Update best solution if improved
-                        if new_cost < best_cost:
-                            best_cost = new_cost
+                        current_cost = cost_function(params)
+                        costs.append(current_cost)
+
+                        if current_cost < best_cost:
+                            best_cost = current_cost
                             best_params = params.copy()
                             no_improvement_count = 0
                         else:
                             no_improvement_count += 1
 
-                        logger.info(f"Step {step+1}: cost={new_cost:.6f}, params={params}, grad_norm={grad_norm:.6f}")
+                        logger.info(f"Step {step+1}: cost={current_cost:.6f}, grad_norm={grad_norm:.6f}")
 
                         if self.progress_callback:
                             self.progress_callback(step, {
                                 "status": "Optimizing quantum circuit",
                                 "progress": (step + 1) / steps,
                                 "step": step,
-                                "total_steps": steps,
-                                "cost": float(new_cost)
+                                "cost": float(current_cost)
                             })
-
                     else:
                         logger.info(f"Gradient too small ({grad_norm:.2e}), stopping optimization")
                         break
 
-                    # Early stopping if no improvement
-                    if no_improvement_count > 5:
+                    if no_improvement_count >= 5:
                         logger.info("Early stopping due to no improvement")
                         break
 
@@ -166,31 +141,16 @@ class QAOACircuit:
                     logger.error(f"Error in optimization step {step}: {str(e)}", exc_info=True)
                     continue
 
-            logger.info(f"Optimization completed. Best cost: {best_cost:.6f}")
             return best_params, costs
 
         except Exception as e:
             logger.error(f"Error during optimization: {str(e)}", exc_info=True)
             raise
 
-    def _validate_params(self, params: np.ndarray) -> np.ndarray:
-        """Validate and normalize parameters."""
+    def get_expectation_values(self, params: np.ndarray, cost_terms: List[Tuple]) -> np.ndarray:
+        """Execute quantum circuit and get expectation values."""
         try:
-            logger.debug(f"Validating parameters: {params}")
-            if not isinstance(params, np.ndarray):
-                params = np.array(params)
-
-            if params.size != 2:
-                logger.warning(f"Invalid parameter size: {params.size}, resetting to default")
-                params = np.array([0.01, np.pi/4])
-
-            # Clip parameters to reasonable ranges
-            params[0] = np.clip(params[0], -2*np.pi, 2*np.pi)  # gamma
-            params[1] = np.clip(params[1], -np.pi, np.pi)      # beta
-
-            logger.debug(f"Validated parameters: {params}")
-            return params
-
+            return self.circuit(params, cost_terms)
         except Exception as e:
-            logger.error(f"Error in parameter validation: {str(e)}", exc_info=True)
+            logger.error(f"Error computing expectation values: {str(e)}", exc_info=True)
             raise

@@ -8,41 +8,69 @@ from qaoa_core import QAOACircuit
 logger = logging.getLogger(__name__)
 
 class HybridOptimizer:
-    """Hybrid quantum-classical optimizer for QAOA with improved performance."""
-
     def __init__(self, n_qubits: int, depth: int = 1, backend: str = 'qiskit', n_vehicles: int = 1):
         """Initialize hybrid optimizer with specified quantum backend."""
         try:
             self.n_qubits = n_qubits
-            self.depth = min(depth, max(1, n_qubits // 4))
-            self.backend = backend
             self.n_vehicles = n_vehicles
 
-            # Optimize qubit allocation for multi-vehicle problems
-            additional_qubits = int(np.ceil(np.log2(n_vehicles + 1))) if n_vehicles > 1 else 0
-            total_qubits = n_qubits + additional_qubits
-            logger.info(f"Optimized qubit count for {n_vehicles} vehicles: {total_qubits}")
+            # Calculate optimal circuit depth based on problem size
+            base_depth = max(1, min(3, n_qubits // 8))  # Scale depth with problem size
+            vehicle_factor = max(1, n_vehicles // 2)  # Scale depth with vehicle count
+            noise_factor = 0.4 if backend == 'qiskit' else 0.6  # PennyLane allows deeper circuits
 
-            # Initialize quantum circuit based on backend choice
+            self.depth = max(1, min(
+                depth,
+                int(base_depth * vehicle_factor * noise_factor)
+            ))
+
+            logger.info(f"Enhanced adaptive circuit depth calculation:")
+            logger.info(f"- Problem size: {n_qubits} qubits")
+            logger.info(f"- Base depth: {base_depth}")
+            logger.info(f"- Depth scale: {vehicle_factor}")
+            logger.info(f"- Noise factor: {noise_factor}")
+            logger.info(f"- Final depth: {self.depth}")
+
+            # Create size-dependent noise model
+            self.noise_scale = min(0.4, max(0.1, n_qubits / 100))
+            logger.info(f"Created enhanced noise model with size factor {self.noise_scale:.3f}")
+
+            # Initialize backend with optimized settings
+            self.backend = backend
             if backend == 'qiskit':
                 try:
-                    self.quantum_circuit = QiskitQAOA(total_qubits, self.depth)
+                    self.quantum_circuit = QiskitQAOA(
+                        n_qubits,
+                        self.depth,
+                        noise_scale=self.noise_scale
+                    )
+                    logger.info("Successfully created custom noise model")
                 except Exception as e:
                     logger.error(f"Failed to initialize Qiskit backend: {str(e)}")
                     raise
             else:
                 try:
-                    self.quantum_circuit = QAOACircuit(total_qubits, self.depth)
+                    self.quantum_circuit = QAOACircuit(
+                        n_qubits,
+                        self.depth,
+                        noise_scale=self.noise_scale
+                    )
                 except Exception as e:
                     logger.error(f"Failed to initialize PennyLane backend: {str(e)}")
                     raise
 
-            self.min_improvement = 1e-4  # Minimum relative improvement threshold
-            self.convergence_window = 5  # Number of iterations to check for convergence
-            self.early_stopping_patience = 10  # Maximum iterations without improvement
+            # Optimization hyperparameters
+            self.min_improvement = 1e-5  # Reduced threshold for more iterations
+            self.convergence_window = max(3, min(10, n_qubits // 4))
+            self.early_stopping_patience = max(5, min(20, n_qubits // 2))
+            self.max_quantum_steps = max(10, min(50, n_qubits * 2))
 
-            logger.info(f"Initialized hybrid optimizer with {backend} backend")
-            logger.debug(f"Configuration: {total_qubits} qubits, depth {self.depth}")
+            logger.info(f"Initialized {backend} optimizer with {n_qubits} qubits")
+            logger.info(f"Optimization parameters:")
+            logger.info(f"- Convergence window: {self.convergence_window}")
+            logger.info(f"- Early stopping patience: {self.early_stopping_patience}")
+            logger.info(f"- Max quantum steps: {self.max_quantum_steps}")
+
         except Exception as e:
             logger.error(f"Failed to initialize hybrid optimizer: {str(e)}")
             raise
@@ -73,8 +101,8 @@ class HybridOptimizer:
 
             for start in range(n_starts):
                 try:
-                    # Initialize with smaller parameter range
-                    initial_guess = np.random.uniform(-np.pi/4, np.pi/4, 2 * self.depth)
+                    # Initialize with smaller parameter range - exactly 2 parameters regardless of depth
+                    initial_guess = np.random.uniform(-np.pi/4, np.pi/4, 2)  # Always 2 parameters
                     logger.debug(f"Start {start + 1}/{n_starts}: Initial parameters: {initial_guess}")
 
                     result = minimize(
@@ -95,7 +123,7 @@ class HybridOptimizer:
             if best_params is None:
                 # Fallback to simple initialization if optimization fails
                 logger.warning("Classical optimization failed, using fallback initialization")
-                best_params = np.array([np.pi/8, np.pi/4] * self.depth)
+                best_params = np.array([np.pi/8, np.pi/4])  # Always 2 parameters
 
             logger.info(f"Classical pre-optimization complete: cost = {best_cost:.6f}")
             return best_params
@@ -148,7 +176,9 @@ class HybridOptimizer:
         """Run hybrid optimization process with improved convergence handling."""
         try:
             # Phase 1: Enhanced classical pre-optimization
+            initial_params = None
             max_retries = 3
+
             for attempt in range(max_retries):
                 try:
                     initial_params = self._classical_pre_optimization(cost_terms)
@@ -164,8 +194,7 @@ class HybridOptimizer:
             logger.debug(f"Initial parameters: {initial_params}")
 
             # Phase 2: Quantum optimization with adaptive steps
-            remaining_steps = steps
-            quantum_steps = min(remaining_steps, 30 // max(1, self.n_vehicles - 1))
+            quantum_steps = min(steps, self.max_quantum_steps)
             logger.info(f"Starting quantum optimization phase: {quantum_steps} steps")
 
             try:
@@ -176,31 +205,48 @@ class HybridOptimizer:
                 best_params = None
                 no_improvement_count = 0
 
-                # Main optimization loop
-                for step in range(quantum_steps):
-                    current_params = initial_params if step == 0 else param_history[-1]
-                    current_cost = self._evaluate_cost(current_params, cost_terms)
-                    cost_history.append(current_cost)
-                    param_history.append(current_params.copy())
+                # Main optimization loop with batch processing
+                batch_size = min(5, quantum_steps // 2)
+                for step in range(0, quantum_steps, batch_size):
+                    batch_costs = []
+                    batch_params = []
 
-                    # Progress callback
-                    if callback:
-                        progress_data = {
-                            "step": step,
-                            "total_steps": steps,
-                            "cost": current_cost,
-                            "best_cost": best_cost if best_cost != float('inf') else current_cost,
-                            "progress": step / steps
-                        }
-                        callback(step, progress_data)
+                    # Process multiple parameter sets in parallel
+                    for i in range(batch_size):
+                        if step + i >= quantum_steps:
+                            break
 
-                    # Check for improvement
-                    if current_cost < best_cost:
-                        improvement = (best_cost - current_cost) / abs(best_cost) if best_cost != float('inf') else 1.0
+                        current_params = initial_params if step + i == 0 else param_history[-1]
+                        current_cost = self._evaluate_cost(current_params, cost_terms)
+
+                        batch_costs.append(current_cost)
+                        batch_params.append(current_params.copy())
+
+                        if callback:
+                            progress = (step + i) / quantum_steps
+                            callback(step + i, {
+                                'step': step + i,
+                                'total_steps': quantum_steps,
+                                'cost': current_cost,
+                                'best_cost': best_cost if best_cost != float('inf') else current_cost,
+                                'progress': progress
+                            })
+
+                    # Update histories
+                    cost_history.extend(batch_costs)
+                    param_history.extend(batch_params)
+
+                    # Find best result in batch
+                    batch_best_idx = np.argmin(batch_costs)
+                    batch_best_cost = batch_costs[batch_best_idx]
+
+                    if batch_best_cost < best_cost:
+                        improvement = (best_cost - batch_best_cost) / abs(best_cost) if best_cost != float('inf') else 1.0
                         if improvement > self.min_improvement:
-                            best_cost = current_cost
-                            best_params = current_params.copy()
+                            best_cost = batch_best_cost
+                            best_params = batch_params[batch_best_idx].copy()
                             no_improvement_count = 0
+                            logger.info(f"New best cost at step {step}: {best_cost:.6f}")
                         else:
                             no_improvement_count += 1
                     else:
@@ -208,18 +254,21 @@ class HybridOptimizer:
 
                     # Early stopping check
                     if no_improvement_count >= self.early_stopping_patience:
-                        logger.info(f"Early stopping triggered after {step + 1} steps")
+                        logger.info(f"Early stopping triggered after {step + batch_size} steps")
                         break
 
                     # Convergence check
                     if len(cost_history) >= self.convergence_window:
                         recent_costs = cost_history[-self.convergence_window:]
                         if np.std(recent_costs) < self.min_improvement:
-                            logger.info(f"Convergence achieved after {step + 1} steps")
+                            logger.info(f"Convergence achieved after {step + batch_size} steps")
                             break
 
                     # Update parameters using quantum gradient
-                    new_params = self._quantum_gradient_step(current_params, cost_terms)
+                    new_params = self._quantum_gradient_step(
+                        batch_params[batch_best_idx],
+                        cost_terms
+                    )
                     initial_params = new_params
 
                 final_params = best_params if best_params is not None else initial_params
@@ -230,11 +279,7 @@ class HybridOptimizer:
                     lambda p: self._evaluate_cost(p, cost_terms),
                     final_params,
                     method='COBYLA',
-                    options={
-                        'maxiter': min(20, remaining_steps - quantum_steps),
-                        'rhobeg': 0.05,
-                        'tol': self.min_improvement
-                    }
+                    options={'maxiter': min(20, steps - quantum_steps)}
                 )
 
                 final_params = result.x
@@ -272,7 +317,7 @@ class HybridOptimizer:
                 grad = grad / grad_norm
 
             # Update parameters with adaptive learning rate
-            learning_rate = 0.1 / (1 + len(params) // 10)  # Reduce learning rate for larger parameter sets
+            learning_rate = 0.1  # Fixed learning rate for 2 parameters
             new_params = params - learning_rate * grad
 
             # Ensure parameters stay within reasonable bounds

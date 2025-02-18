@@ -204,7 +204,7 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         cost_terms = []
         max_coeff = np.max(np.abs(qubo_matrix))
         mean_coeff = np.mean(np.abs(qubo_matrix[np.nonzero(qubo_matrix)]))
-        threshold = mean_coeff * 0.01
+        threshold = mean_coeff * 0.01  # More aggressive threshold for larger problems
 
         for i in range(n_qubits):
             for j in range(i + 1, n_qubits):
@@ -227,7 +227,7 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
 
         circuit_start = time.time()
         if hybrid:
-            circuit = HybridOptimizer(n_qubits, depth=min(2, n_cities//2), backend=backend)
+            circuit = HybridOptimizer(n_qubits, depth=min(2, n_cities//2), backend=backend, n_vehicles=n_vehicles)
             logger.info(f"Initialized hybrid optimizer with {backend} backend")
         else:
             if backend == 'qiskit':
@@ -242,20 +242,15 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         optimization_start = time.time()
         steps = min(max_steps, n_qubits * 5)
 
-        def optimization_callback(step, cost):
+        def optimization_callback(step, data):
             if progress_callback:
-                progress = step / steps
+                progress = data.get('progress', 0)
                 progress_callback("Optimizing quantum circuit", 
                                 {"status": f"Step {step}/{steps} ({progress:.1%})", 
-                                 "cost": float(cost)})
+                                 "cost": float(data.get('cost', 0))})
 
         # Backend-specific optimization with progress updates
-        if backend == 'qiskit':
-            params, costs = circuit.optimize(cost_terms, steps=steps, callback=optimization_callback)
-        else:
-            params, costs = circuit.optimize(cost_terms, steps=steps)
-            if progress_callback:
-                progress_callback("Optimization complete", {"status": "Finalizing results"})
+        params, costs = circuit.optimize(cost_terms, steps=steps, callback=optimization_callback)
 
         metrics['optimization_time'] = time.time() - optimization_start
         logger.info(f"Optimization completed in {metrics['optimization_time']:.3f}s")
@@ -273,6 +268,7 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         metrics['network'] = network
         metrics['nodes'] = nodes
 
+        # Calculate route lengths and other metrics
         total_length = 0
         max_route_length = 0
         for route in routes:
@@ -306,7 +302,6 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
                 "quantum_advantage": f"{-metrics['quantum_classical_gap']:.1%}"
             })
 
-        logger.info(f"Solution metrics - Length: {total_length:.2f}, Gap to classical: {metrics['quantum_classical_gap']:.1%}")
         return metrics
 
     except Exception as e:

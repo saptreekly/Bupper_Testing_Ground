@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import logging
 from flask import Flask, render_template, send_from_directory, request, jsonify
@@ -32,7 +35,12 @@ for directory in [static_dir, templates_dir, route_maps_dir]:
 app = Flask(__name__, 
             static_folder=static_dir,
             template_folder=templates_dir)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+# Enable debug mode for better error messages
+app.config['DEBUG'] = True
+app.config['SECRET_KEY'] = 'your-secret-key-here'
+
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', logger=True, engineio_logger=True)
 
 @app.route('/')
 def index():
@@ -105,6 +113,17 @@ def optimize():
             else:
                 logger.error("Missing network or nodes in metrics")
 
+            # Verify files exist after creation
+            if not os.path.exists(map_path):
+                logger.error(f"Map file was not created at {map_path}")
+                return jsonify({
+                    'success': False,
+                    'error': "Failed to generate route map"
+                }), 500
+
+            if not os.path.exists(png_path):
+                logger.error(f"PNG file was not created at {png_path}")
+
             response_metrics = {
                 'total_time': metrics.get('total_time', 0),
                 'solution_length': metrics.get('solution_length', 0),
@@ -151,14 +170,15 @@ def serve_static(filename):
 
 if __name__ == '__main__':
     try:
-        port = 5001
+        port = 3000
         logger.info(f"Starting Flask server with SocketIO on port {port}")
         socketio.run(
             app,
             host='0.0.0.0',
             port=port,
             debug=False,
-            use_reloader=False
+            use_reloader=False,
+            log_output=True
         )
     except Exception as e:
         logger.error(f"Failed to start server: {str(e)}")

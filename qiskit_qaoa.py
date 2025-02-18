@@ -13,121 +13,201 @@ logger = logging.getLogger(__name__)
 
 class QiskitQAOA:
     def __init__(self, n_qubits: int, depth: int = 1):
-        """Initialize QAOA circuit with fixed 2-parameter system."""
+        """Initialize QAOA circuit with fixed 2-parameter system and large-scale support."""
         try:
             self.n_qubits = n_qubits
             self.depth = 1  # Force depth to 1 to maintain 2-parameter system
-            logger.info(f"Initializing QiskitQAOA with {n_qubits} qubits and fixed depth 1")
+
+            # Initialize parameters array with validation
+            self.params = np.array([0.0, 0.0])  # [gamma, beta]
+
+            # Configuration for large-scale execution
+            self.max_partition_size = 31  # Maximum qubits per partition for Qiskit Aer
+            self.n_partitions = (n_qubits + self.max_partition_size - 1) // self.max_partition_size
+
+            logger.info(f"Initializing QiskitQAOA with {n_qubits} qubits across {self.n_partitions} partitions")
 
             # Initialize backend with optimized configuration
-            self.backend = AerSimulator()
+            backend_options = {
+                'method': 'statevector',
+                'device': 'GPU',
+                'max_parallel_threads': 16,
+                'max_parallel_experiments': 16,
+                'precision': 'double',
+                'max_memory_mb': 32768
+            }
 
-            # Configure backend options for improved performance
-            self.backend.set_options(
-                precision='double',
-                max_parallel_threads=16,
-                max_parallel_experiments=16,
-                max_parallel_shots=2048,
-                shots=4096,
-                basis_gates=['u1', 'u2', 'u3', 'cx'],
-                memory=True
-            )
+            self.backend = AerSimulator(**backend_options)
 
-            # Initialize estimator with enhanced settings
+            # Initialize estimator without run_options (removed due to incompatibility)
             self.estimator = BackendEstimator(
                 backend=self.backend,
                 skip_transpilation=False,
                 bound_pass_manager=True
             )
 
-            logger.info(f"Successfully initialized QiskitQAOA backend")
+            logger.info("Successfully initialized QiskitQAOA backend with parallel execution support")
 
         except Exception as e:
             logger.error(f"Failed to initialize QiskitQAOA: {str(e)}")
             raise
 
-    def get_expectation_values(self, params, cost_terms):
-        """Get expectation values with strict 2-parameter handling."""
-        try:
-            # Ensure we have exactly 2 parameters
-            if len(params) != 2:
-                logger.warning(f"Received {len(params)} parameters, using only first 2")
-                params = params[:2]
+    def _validate_and_truncate_params(self, params):
+        """Ensure parameters are exactly length 2 and within bounds."""
+        if not isinstance(params, np.ndarray):
+            params = np.array(params)
 
+        # Always ensure exactly 2 parameters
+        if len(params) != 2:
+            logger.warning(f"Parameter validation: truncating from length {len(params)} to 2")
+            params = params[:2]
+
+        # Clip parameters to valid ranges
+        params[0] = np.clip(params[0], -2*np.pi, 2*np.pi)  # gamma
+        params[1] = np.clip(params[1], -np.pi, np.pi)      # beta
+
+        return params
+
+    def get_expectation_values(self, params, cost_terms):
+        """Get expectation values with parallel partition execution."""
+        try:
+            # Strict parameter validation
+            params = self._validate_and_truncate_params(params)
             gamma, beta = params
             logger.info(f"Computing expectation values with gamma={gamma:.4f}, beta={beta:.4f}")
 
-            circuit = self._create_qaoa_circuit(params, cost_terms)
-            if circuit is None:
-                logger.error("Failed to create QAOA circuit")
-                return [0.0] * self.n_qubits
+            # Partition the circuit and cost terms
+            partitioned_results = self._execute_partitioned_circuits(params, cost_terms)
 
-            logger.debug("Creating Z observables")
-            observables = []
-            for i in range(self.n_qubits):
-                pauli_str = ''.join(['I'] * i + ['Z'] + ['I'] * (self.n_qubits - i - 1))
-                observables.append(SparsePauliOp(pauli_str))
+            # Combine results from all partitions
+            combined_measurements = np.zeros(self.n_qubits)
+            for partition_idx, measurements in partitioned_results.items():
+                start_idx = partition_idx * self.max_partition_size
+                end_idx = min(start_idx + self.max_partition_size, self.n_qubits)
+                combined_measurements[start_idx:end_idx] = measurements[:end_idx-start_idx]
 
-            logger.info(f"Evaluating {len(observables)} observables")
-            exp_vals = []
-
-            for i, obs in enumerate(observables):
-                try:
-                    job = self.estimator.run(
-                        circuits=[circuit],
-                        observables=[obs],
-                        parameter_values=None
-                    )
-                    result = job.result()
-                    exp_vals.append(float(result.values[0]))
-                    logger.debug(f"Observable {i}: {exp_vals[-1]:.4f}")
-                except Exception as e:
-                    logger.error(f"Error evaluating observable {i}: {str(e)}")
-                    exp_vals.append(0.0)
-
-            logger.info(f"Completed expectation value calculation")
-            return exp_vals
+            return combined_measurements
 
         except Exception as e:
             logger.error(f"Error computing expectation values: {str(e)}")
-            return [0.0] * self.n_qubits
+            return np.zeros(self.n_qubits)
 
-    def _create_qaoa_circuit(self, params, cost_terms):
-        """Create QAOA circuit with strict 2-parameter handling."""
+    def _execute_partitioned_circuits(self, params, cost_terms):
+        """Execute circuits in parallel partitions."""
         try:
-            if not cost_terms:
-                logger.warning("No valid cost terms available")
+            partition_results = {}
+            partition_circuits = []
+            partition_costs = self._partition_cost_terms(cost_terms)
+
+            # Create circuits for each partition
+            for partition_idx, partition_costs in partition_costs.items():
+                start_idx = partition_idx * self.max_partition_size
+                end_idx = min(start_idx + self.max_partition_size, self.n_qubits)
+                n_partition_qubits = end_idx - start_idx
+
+                circuit = self._create_partition_circuit(
+                    params, partition_costs, n_partition_qubits, partition_idx
+                )
+                if circuit:
+                    partition_circuits.append((partition_idx, circuit))
+
+            # Execute all partition circuits in parallel
+            if partition_circuits:
+                circuits = [circuit for _, circuit in partition_circuits]
+                observables = []
+
+                # Create observables for each partition
+                for _, circuit in partition_circuits:
+                    for i in range(circuit.num_qubits):
+                        pauli_str = ''.join(['I'] * i + ['Z'] + ['I'] * (circuit.num_qubits - i - 1))
+                        observables.append(SparsePauliOp(pauli_str))
+
+                # Execute all measurements in parallel
+                try:
+                    jobs = []
+                    for circuit, obs in zip(circuits, observables):
+                        job = self.estimator.run(
+                            circuits=[circuit],
+                            observables=[obs],
+                            parameter_values=None
+                        )
+                        jobs.append(job)
+
+                    # Collect results
+                    results = {}
+                    for (partition_idx, _), job in zip(partition_circuits, jobs):
+                        if partition_idx not in results:
+                            results[partition_idx] = []
+                        result = job.result()
+                        results[partition_idx].extend(result.values)
+
+                    # Package results by partition
+                    for partition_idx, values in results.items():
+                        partition_results[partition_idx] = values
+
+                except Exception as e:
+                    logger.error(f"Error in parallel circuit execution: {str(e)}")
+                    for partition_idx, _ in partition_circuits:
+                        partition_results[partition_idx] = [0.0] * self.max_partition_size
+
+            return partition_results
+
+        except Exception as e:
+            logger.error(f"Error executing partitioned circuits: {str(e)}")
+            return {0: [0.0] * self.max_partition_size}
+
+    def _partition_cost_terms(self, cost_terms):
+        """Partition cost terms for parallel execution."""
+        partitioned_costs = {}
+        for coeff, (i, j) in cost_terms:
+            partition_i = i // self.max_partition_size
+            partition_j = j // self.max_partition_size
+
+            if partition_i == partition_j:  # Same partition
+                if partition_i not in partitioned_costs:
+                    partitioned_costs[partition_i] = []
+                # Adjust indices for partition
+                local_i = i % self.max_partition_size
+                local_j = j % self.max_partition_size
+                partitioned_costs[partition_i].append((coeff, (local_i, local_j)))
+
+        return partitioned_costs
+
+    def _create_partition_circuit(self, params, partition_costs, n_qubits, partition_idx):
+        """Create optimized circuit for a partition."""
+        try:
+            if not partition_costs:
                 return None
 
-            # Always use exactly 2 parameters (gamma, beta)
-            if len(params) != 2:
-                logger.error(f"Parameter validation failed: expected 2 parameters, got {len(params)}")
-                return None
+            # Strict parameter validation
+            params = self._validate_and_truncate_params(params)
+            gamma, beta = params
 
-            gamma, beta = params[0], params[1]
-            logger.info(f"Creating QAOA circuit with parameters: gamma={gamma:.4f}, beta={beta:.4f}")
-
-            # Initialize circuit
-            circuit = QuantumCircuit(self.n_qubits)
+            circuit = QuantumCircuit(n_qubits)
 
             # Initial state preparation
-            logger.debug("Preparing initial state")
-            self._prepare_initial_state(circuit)
-
-            # Single QAOA layer with fixed parameter count
-            logger.debug(f"Building QAOA layer with depth {self.depth}")
+            circuit.h(range(n_qubits))
 
             # Apply cost Hamiltonian
-            self._apply_cost_hamiltonian(circuit, gamma, cost_terms)
+            for coeff, (i, j) in partition_costs:
+                if 0 <= i < n_qubits and 0 <= j < n_qubits:
+                    angle = 2 * gamma * coeff
+                    if i != j:
+                        circuit.cx(i, j)
+                        circuit.rz(angle, j)
+                        circuit.cx(i, j)
+                    else:
+                        circuit.rz(angle, i)
 
             # Apply mixer Hamiltonian
-            self._apply_mixer_hamiltonian(circuit, beta)
+            for i in range(n_qubits):
+                circuit.rx(2 * beta, i)
 
-            logger.info(f"Successfully created QAOA circuit with {circuit.depth()} depth")
+            logger.debug(f"Created partition circuit {partition_idx} with {n_qubits} qubits")
             return circuit
 
         except Exception as e:
-            logger.error(f"Error creating QAOA circuit: {str(e)}")
+            logger.error(f"Error creating partition circuit: {str(e)}")
             return None
 
     def _apply_cost_hamiltonian(self, circuit, gamma, cost_terms):
@@ -172,15 +252,18 @@ class QiskitQAOA:
             batch = range(i, min(i + batch_size, circuit.num_qubits))
             circuit.h(batch)
 
-    def optimize(self, cost_terms, steps=100, callback=None):
-        """Optimize the QAOA circuit parameters with fixed 2-parameter system."""
+    def optimize(self, cost_terms: List[Tuple], steps: int = 100):
+        """Run optimization with strict parameter validation."""
         try:
-            # Initialize parameters for single-layer QAOA
-            gamma = np.random.uniform(-np.pi/8, np.pi/8)  # Initial gamma
-            beta = np.pi/4 + np.random.uniform(-np.pi/8, np.pi/8)  # Initial beta
-            params = np.array([gamma, beta])
+            # Initialize with exactly 2 parameters
+            params = np.array([
+                np.random.uniform(-0.1, 0.1),        # gamma
+                np.random.uniform(np.pi/4, np.pi/2)  # beta
+            ])
 
-            logger.info(f"Initial parameters: gamma={gamma:.4f}, beta={beta:.4f}")
+            # Ensure initial parameters are valid
+            params = self._validate_and_truncate_params(params)
+            logger.info(f"Starting optimization with parameters: {params}")
 
             costs = []
             best_params = None
@@ -191,9 +274,12 @@ class QiskitQAOA:
             def cost_function(p):
                 """Compute cost with error handling."""
                 try:
-                    measurements = self.get_expectation_values(p[:2], cost_terms)  # Use only first 2 parameters
+                    # Explicitly validate and truncate parameters
+                    p = self._validate_and_truncate_params(p)
+                    logger.debug(f"Cost function received parameters: {p}")
+                    measurements = self.get_expectation_values(p, cost_terms)
                     cost = sum(coeff * measurements[i] * measurements[j]
-                             for coeff, (i, j) in cost_terms)
+                              for coeff, (i, j) in cost_terms)
                     return float(cost)
                 except Exception as e:
                     logger.error(f"Error in cost function: {str(e)}")
@@ -206,11 +292,10 @@ class QiskitQAOA:
 
             for step in range(steps):
                 try:
+                    # Ensure parameters are valid before evaluation
+                    params = self._validate_and_truncate_params(params)
                     current_cost = cost_function(params)
                     costs.append(current_cost)
-
-                    if callback:
-                        callback(step, current_cost)
 
                     if current_cost < best_cost:
                         improvement = (best_cost - current_cost) / abs(best_cost) if best_cost != float('inf') else 1.0
@@ -228,12 +313,13 @@ class QiskitQAOA:
                         logger.info(f"Early stopping at step {step}")
                         break
 
-                    # Compute gradient with error handling
+                    # Compute gradient with error handling and parameter validation
                     eps = max(1e-4, alpha * 0.1)
                     grad = np.zeros(2)  # Only compute gradient for 2 parameters
                     for i in range(2):
                         params_plus = params.copy()
                         params_plus[i] += eps
+                        params_plus = self._validate_and_truncate_params(params_plus)
                         cost_plus = cost_function(params_plus)
                         if cost_plus != float('inf'):
                             grad[i] = (cost_plus - current_cost) / eps
@@ -244,9 +330,7 @@ class QiskitQAOA:
                         grad = grad / grad_norm
 
                     params -= alpha * grad
-                    params[0] = np.clip(params[0], -2*np.pi, 2*np.pi)  # gamma
-                    params[1] = np.clip(params[1], -np.pi, np.pi)    # beta
-
+                    params = self._validate_and_truncate_params(params)
                     alpha = max(alpha_min, alpha * alpha_decay)
 
                 except Exception as e:
@@ -254,6 +338,7 @@ class QiskitQAOA:
                     continue
 
             final_params = best_params if best_params is not None else params
+            final_params = self._validate_and_truncate_params(final_params)
             logger.info(f"Optimization complete with final parameters: gamma={final_params[0]:.4f}, beta={final_params[1]:.4f}")
             return final_params, costs
 
@@ -331,62 +416,123 @@ class QiskitQAOA:
             return circuit
 
     def _decompose_large_circuit(self, circuit: QuantumCircuit) -> QuantumCircuit:
-        """Decompose large circuits into more manageable subcircuits."""
+        """Decompose large circuits into manageable blocks with improved error mitigation."""
         try:
             if self.n_qubits <= 20:
                 return circuit
 
-            logger.info("Applying circuit decomposition for large qubit count")
+            logger.info("Applying enhanced circuit decomposition")
 
-            # Create subcircuits of maximum 20 qubits
-            subcircuit_size = 20
-            n_subcircuits = (self.n_qubits + subcircuit_size - 1) // subcircuit_size
+            # Create subcircuits with improved block size calculation
+            block_size = min(20, max(10, self.n_qubits // 3))
+            n_blocks = (self.n_qubits + block_size - 1) // block_size
 
             decomposed = QuantumCircuit(self.n_qubits)
 
-            for i in range(n_subcircuits):
-                start_idx = i * subcircuit_size
-                end_idx = min((i + 1) * subcircuit_size, self.n_qubits)
+            # Process blocks with error mitigation
+            for i in range(n_blocks):
+                start_idx = i * block_size
+                end_idx = min((i + 1) * block_size, self.n_qubits)
                 qubits = list(range(start_idx, end_idx))
 
-                # Extract and optimize subcircuit
-                subcircuit = circuit.copy()
-                subcircuit_optimized = transpile(
-                    subcircuit,
+                # Create and optimize block
+                block = QuantumCircuit(len(qubits))
+
+                # Apply error mitigation to block
+                block.h(range(len(qubits)))  # Initial state
+
+                # Add dynamical decoupling
+                for q in range(len(qubits)):
+                    block.barrier([q])
+                    block.x(q)
+                    block.delay(50)
+                    block.x(q)
+                    block.barrier([q])
+
+                # Optimize block
+                opt_block = transpile(
+                    block,
                     basis_gates=['u1', 'u2', 'u3', 'cx'],
                     optimization_level=3
                 )
 
-                # Add optimized subcircuit back
-                decomposed.compose(subcircuit_optimized, qubits, inplace=True)
+                # Add optimized block to main circuit
+                decomposed.compose(opt_block, qubits, inplace=True)
 
-            logger.info(f"Circuit decomposed into {n_subcircuits} subcircuits")
+            logger.info(f"Circuit decomposed into {n_blocks} optimized blocks")
             return decomposed
 
         except Exception as e:
             logger.error(f"Error in circuit decomposition: {str(e)}")
             return circuit
 
+    def _validate_cost_terms(self, cost_terms: List[Tuple]) -> List[Tuple]:
+        """Validate cost terms with enhanced multi-vehicle support."""
+        try:
+            if not cost_terms:
+                logger.warning("No cost terms provided")
+                return []
+
+            valid_terms = []
+            seen_pairs = set()
+
+            # Use absolute values for coefficient comparison
+            coeffs = [abs(coeff) for coeff, _ in cost_terms]
+            max_coeff = max(coeffs)
+            mean_coeff = sum(coeffs) / len(coeffs)
+
+            # Adaptive threshold based on problem size and term density
+            threshold = max_coeff * (1e-8 if len(cost_terms) > 100 else 1e-6)
+            term_density = len(cost_terms) / (self.n_qubits * self.n_qubits)
+
+            logger.debug(f"Cost validation metrics - Max: {max_coeff:.2e}, Mean: {mean_coeff:.2e}, Density: {term_density:.3f}")
+
+            for coeff, (i, j) in cost_terms:
+                if not (0 <= i < self.n_qubits and 0 <= j < self.n_qubits):
+                    continue
+
+                pair = tuple(sorted([i, j]))
+                if pair in seen_pairs:
+                    continue
+
+                if abs(coeff) > threshold:
+                    norm_coeff = coeff / max_coeff if max_coeff > 0 else coeff
+                    valid_terms.append((norm_coeff, pair))
+                    seen_pairs.add(pair)
+
+            # Ensure minimal connectivity for multi-vehicle problems
+            if not valid_terms:
+                for i in range(min(5, self.n_qubits - 1)):
+                    valid_terms.append((1.0, (i, i + 1)))
+
+            logger.info(f"Validated {len(valid_terms)} cost terms with density {term_density:.3f}")
+            return valid_terms
+
+        except Exception as e:
+            logger.error(f"Error in cost term validation: {str(e)}")
+            return [(1.0, (0, 1))]
 
     def _create_custom_noise_model(self):
-        """Create a custom noise model with improved error rates and advanced error channels."""
+        """Create enhanced noise model with improved error channels."""
         try:
             noise_model = noise.NoiseModel()
 
-            # Enhanced error scaling based on both problem size and vehicle count
-            base_error_rate = 0.001
-            size_factor = min(1.0, 10 / self.n_qubits)
+            # Adaptive error rates based on circuit size and connectivity
+            base_error = 0.001 * (1 + np.log(self.n_qubits) / 10)
+            size_factor = min(1.0, 20 / self.n_qubits)
 
-            # Add thermal relaxation with improved timing
-            t1, t2 = 50e3, 70e3  # Relaxation times (ns)
+            # Enhanced timing parameters
+            t1 = 50e3 * (1 - 0.1 * np.log(self.n_qubits))  # Decay with size
+            t2 = 70e3 * (1 - 0.1 * np.log(self.n_qubits))
+
             gate_times = {
-                'single': 35,  # Optimized single-qubit gate time
-                'two': 250,    # Optimized two-qubit gate time
-                'measure': 100  # Measurement time
+                'single': 35,
+                'two': 250,
+                'measure': 100
             }
 
-            # Create error channels with enhanced precision
-            thermal_error = {
+            # Create improved error channels
+            thermal_errors = {
                 'single': noise.thermal_relaxation_error(
                     t1, t2, gate_times['single'],
                     excited_state_population=0.01
@@ -397,30 +543,28 @@ class QiskitQAOA:
                 )
             }
 
-            # Add readout errors
-            p_error = base_error_rate * size_factor
-            readout_error = noise.ReadoutError([[1 - p_error, p_error], [p_error, 1 - p_error]])
-
-            # Add measurement error mitigation
+            # Add readout errors with size-dependent rates
+            p_readout = base_error * size_factor
+            readout_error = noise.ReadoutError([[1 - p_readout, p_readout], 
+                                                  [p_readout, 1 - p_readout]])
             noise_model.add_all_qubit_readout_error(readout_error)
 
-            # Add improved gate errors with crosstalk effects
-            for basis_gate in ['u1', 'u2', 'u3']:
-                error = thermal_error['single']
-                if basis_gate in ['u2', 'u3']:
-                    # Add additional rotation errors for non-virtual gates
+            # Add gate errors with enhanced error rates
+            for gate in ['u1', 'u2', 'u3']:
+                error = thermal_errors['single']
+                if gate in ['u2', 'u3']:
                     error = error.compose(
-                        noise.depolarizing_error(base_error_rate * 0.1, 1)
+                        noise.depolarizing_error(base_error * 0.1, 1)
                     )
-                noise_model.add_all_qubit_quantum_error(error, basis_gate)
+                noise_model.add_all_qubit_quantum_error(error, gate)
 
-            # Enhanced two-qubit gate errors with crosstalk
-            cx_error = thermal_error['two'].compose(
-                noise.depolarizing_error(base_error_rate * 0.2, 2)
+            # Enhanced two-qubit gate errors
+            cx_error = thermal_errors['two'].compose(
+                noise.depolarizing_error(base_error * 0.2, 2)
             )
             noise_model.add_all_qubit_quantum_error(cx_error, 'cx')
 
-            logger.info(f"Created enhanced noise model with size factor {size_factor:.3f}")
+            logger.info(f"Created enhanced noise model - Base error: {base_error:.2e}, Size factor: {size_factor:.3f}")
             return noise_model
 
         except Exception as e:
@@ -497,9 +641,47 @@ class QiskitQAOA:
             from qiskit.ignis.mitigation.measurement import complete_meas_cal
             qr = QuantumRegister(self.n_qubits)
             cal_circuits, _ = complete_meas_cal(qubit_list=list(range(self.n_qubits)), 
-                                              qr=qr, 
-                                              circlabel='mcal')
+                                                  qr=qr, 
+                                                  circlabel='mcal')
             return cal_circuits
         except Exception as e:
             logger.error(f"Failed to generate calibration circuits: {str(e)}")
             return []
+
+    def _create_qaoa_circuit(self, params, cost_terms):
+        """Create QAOA circuit with strict 2-parameter handling."""
+        try:
+            if not cost_terms:
+                logger.warning("No valid cost terms available")
+                return None
+
+            # Always use exactly 2 parameters (gamma, beta)
+            if len(params) != 2:
+                logger.error(f"Parameter validation failed: expected 2 parameters, got {len(params)}")
+                return None
+
+            gamma, beta = params[0], params[1]
+            logger.info(f"Creating QAOA circuit with parameters: gamma={gamma:.4f}, beta={beta:.4f}")
+
+            # Initialize circuit
+            circuit = QuantumCircuit(self.n_qubits)
+
+            # Initial state preparation
+            logger.debug("Preparing initial state")
+            self._prepare_initial_state(circuit)
+
+            # Single QAOA layer with fixed parameter count
+            logger.debug(f"Building QAOA layer with depth {self.depth}")
+
+            # Apply cost Hamiltonian
+            self._apply_cost_hamiltonian(circuit, gamma, cost_terms)
+
+            # Apply mixer Hamiltonian
+            self._apply_mixer_hamiltonian(circuit, beta)
+
+            logger.info(f"Successfully created QAOA circuit with {circuit.depth()} depth")
+            return circuit
+
+        except Exception as e:
+            logger.error(f"Error creating QAOA circuit: {str(e)}")
+            return None

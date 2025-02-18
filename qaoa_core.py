@@ -37,12 +37,13 @@ class QAOACircuit:
 
                 try:
                     logger.info(f"Creating device for partition {i} with {partition_size} qubits")
+                    # Set shots=None explicitly for analytic mode
                     dev = qml.device('default.qubit', wires=partition_size, shots=None)
                     self.devices.append(dev)
 
                     # Create circuit function factory that captures cost_terms
                     def create_circuit(dev, partition_size, partition_cost_terms):
-                        @qml.qnode(dev)
+                        @qml.qnode(dev, interface="autograd")  # Specify autograd interface for better compatibility
                         def circuit(params):
                             # Initial state preparation
                             for i in range(partition_size):
@@ -102,7 +103,6 @@ class QAOACircuit:
                     measurements[start_idx:start_idx + partition_size] = np.zeros(partition_size)
 
             return measurements
-
         except Exception as e:
             logger.error(f"Error getting expectation values: {str(e)}")
             raise

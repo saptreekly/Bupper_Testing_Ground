@@ -242,16 +242,16 @@ class TestQAOA(unittest.TestCase):
 
             # Create QUBO matrix with simplified demands
             demands = [0.0, 1.0]  # Depot has no demand
-            qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands)
+            matrix, cost_terms = qubo.create_qubo_matrix(distance_matrix, demands=demands)
 
             # Verify QUBO properties
             n_qubits = n_cities * n_cities * self.n_vehicles
-            self.assertEqual(qubo_matrix.shape, (n_qubits, n_qubits))
-            self.assertTrue(np.allclose(qubo_matrix, qubo_matrix.T))
+            self.assertEqual(matrix.shape, (n_qubits, n_qubits))
+            self.assertTrue(np.allclose(matrix, matrix.T))
 
             # Test QAOA optimization
             circuit = QAOACircuit(n_qubits, depth=1)
-            params, costs = circuit.optimize(self._create_cost_terms(qubo_matrix), steps=2)
+            params, costs = circuit.optimize(cost_terms, steps=2)
 
             # Verify optimization results
             self.assertIsNotNone(params)

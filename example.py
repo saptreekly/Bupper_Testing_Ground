@@ -192,7 +192,14 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         start_time = time.time()
         qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)
         metrics['qubo_formation_time'] = time.time() - start_time
-        metrics['qubo_sparsity'] = np.count_nonzero(qubo_matrix) / (qubo_matrix.size)
+        # Check if qubo_matrix is a tuple (matrix, cost_terms) or just matrix
+        if isinstance(qubo_matrix, tuple):
+            matrix, cost_terms = qubo_matrix
+            metrics['qubo_sparsity'] = np.count_nonzero(matrix) / (matrix.size)
+            metrics['n_cost_terms'] = len(cost_terms)
+        else:
+            metrics['qubo_sparsity'] = np.count_nonzero(qubo_matrix) / (qubo_matrix.size)
+            metrics['n_cost_terms'] = 0
 
         if progress_callback:
             progress_callback(0, {"status": "Generating cost terms", "progress": 0.3})
@@ -200,18 +207,32 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         start_time = time.time()
         n_qubits = n_cities * n_cities * n_vehicles
         cost_terms = []
-        max_coeff = np.max(np.abs(qubo_matrix))
-        mean_coeff = np.mean(np.abs(qubo_matrix[np.nonzero(qubo_matrix)]))
+
+        # Use the correct matrix from the tuple
+        if isinstance(qubo_matrix, tuple):
+            matrix, qubo_cost_terms = qubo_matrix
+            max_coeff = np.max(np.abs(matrix))
+            mean_coeff = np.mean(np.abs(matrix[np.nonzero(matrix)]))
+        else:
+            matrix = qubo_matrix
+            max_coeff = np.max(np.abs(matrix))
+            mean_coeff = np.mean(np.abs(matrix[np.nonzero(matrix)]))
+            qubo_cost_terms = []
+
         threshold = mean_coeff * 0.01
 
-        for i in range(n_qubits):
-            for j in range(i + 1, n_qubits):
-                if abs(qubo_matrix[i, j]) > threshold:
-                    cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
+        # Use the cost terms directly from QUBO formulation if available
+        if qubo_cost_terms:
+            cost_terms = [(float(coeff), (i, j)) for coeff, (i, j) in qubo_cost_terms]
+        else:
+            for i in range(n_qubits):
+                for j in range(i + 1, n_qubits):
+                    if abs(matrix[i, j]) > threshold:
+                        cost_terms.append((float(matrix[i, j]), (i, j)))
 
-                if progress_callback and i % 100 == 0:
-                    progress = 0.3 + (0.2 * i / n_qubits)
-                    progress_callback(0, {"status": f"Processing quantum parameters", "progress": progress})
+                    if progress_callback and i % 100 == 0:
+                        progress = 0.3 + (0.2 * i / n_qubits)
+                        progress_callback(0, {"status": f"Processing quantum parameters", "progress": progress})
 
         metrics['cost_terms_generation_time'] = time.time() - start_time
         metrics['n_cost_terms'] = len(cost_terms)
@@ -537,6 +558,7 @@ def main():
         except Exception as opt_error:
             logger.error(f"Optimization error with {args.backend} backend: %s", str(opt_error))
             raise
+
 
 
         total_route_length = 0

@@ -114,15 +114,23 @@ def optimize():
                     logger.info(f"Successfully generated route maps: {map_filename}")
                 else:
                     logger.error("No routes found in metrics")
+                    return jsonify({
+                        'success': False,
+                        'error': "No valid routes generated during optimization"
+                    }), 500
             else:
                 logger.error("Missing network or nodes in metrics")
+                return jsonify({
+                    'success': False,
+                    'error': "Missing network data in optimization results"
+                }), 500
 
             response_metrics = {
                 'total_time': metrics.get('total_time', 0),
                 'solution_length': metrics.get('solution_length', 0),
                 'quantum_classical_gap': metrics.get('quantum_classical_gap', 0),
                 'n_routes': len(metrics.get('routes', [])),
-                'cost_terms': len(metrics.get('cost_terms', [])),
+                'cost_terms': metrics.get('n_cost_terms', 0),
                 'qubo_sparsity': metrics.get('qubo_sparsity', 0)
             }
 

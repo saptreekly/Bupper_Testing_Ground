@@ -36,7 +36,7 @@ class QUBOFormulation:
         return distance_matrix
     
     def create_qubo_matrix(self, distance_matrix: np.ndarray, demands: List[float] = None, 
-                          penalty: float = 2.0) -> Tuple[np.ndarray, List[Tuple[float, Tuple[int, int]]]]:
+                        penalty: float = 2.0) -> Tuple[np.ndarray, List[Tuple[float, Tuple[int, int]]]]:
         """Create QUBO matrix for the vehicle routing problem."""
         if demands is None:
             demands = [0.0] + [1.0] * (self.n_cities - 1)  # First city (depot) has no demand
@@ -62,18 +62,18 @@ class QUBOFormulation:
                 for j in range(self.n_cities):
                     if i != j:
                         idx1 = self._get_qubit_index(i, j, v)
-                        coeff = normalized_distances[i,j]
+                        coeff = float(normalized_distances[i,j])
                         Q[idx1, idx1] = coeff
-                        cost_terms.append((float(coeff), (idx1, idx1)))  # Add diagonal terms
+                        cost_terms.append((coeff, (idx1, idx1)))  # Add diagonal terms
 
                         # Add interaction terms between consecutive cities
                         for k in range(self.n_cities):
                             if k != i and k != j:
                                 idx2 = self._get_qubit_index(j, k, v)
-                                interaction_coeff = normalized_distances[i,j] + normalized_distances[j,k]
+                                interaction_coeff = float(normalized_distances[i,j] + normalized_distances[j,k])
                                 Q[idx1, idx2] = interaction_coeff
                                 if idx1 < idx2:  # Avoid duplicates
-                                    cost_terms.append((float(interaction_coeff), (idx1, idx2)))
+                                    cost_terms.append((interaction_coeff, (idx1, idx2)))
 
         # Add constraint terms with penalty
         self._add_constraint_terms(Q, penalty, demands)

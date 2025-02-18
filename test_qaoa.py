@@ -2,10 +2,10 @@ import unittest
 import numpy as np
 import logging
 from qaoa_core import QAOACircuit
+from qiskit_qaoa import QiskitQAOA
 from qubo_formulation import QUBOFormulation
 from utils import Utils
 from example import parse_coordinates, validate_coordinates
-from hybrid_optimizer import HybridOptimizer
 import matplotlib.pyplot as plt
 from time import time
 
@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.DEBUG,
 logger = logging.getLogger(__name__)
 
 class TestQAOA(unittest.TestCase):
-    """Test suite for QAOA implementation."""
+    """Test suite for QAOA implementation with enhanced validation."""
 
     def setUp(self):
         """Set up test fixtures."""
@@ -23,6 +23,146 @@ class TestQAOA(unittest.TestCase):
         self.grid_size = 8
         self.n_vehicles = 1
         self.vehicle_capacity = [float('inf')]
+
+    def test_qiskit_backend_initialization(self):
+        """Test Qiskit backend initialization and parameter handling."""
+        try:
+            # Test initialization with different qubit counts
+            test_sizes = [2, 3, 5]
+            for n_qubits in test_sizes:
+                logger.info(f"Testing initialization with {n_qubits} qubits")
+                optimizer = QiskitQAOA(n_qubits)
+                self.assertIsNotNone(optimizer.estimator, "Estimator not initialized")
+                self.assertIsNotNone(optimizer.backend, "Backend not initialized")
+
+            # Test parameter validation
+            optimizer = QiskitQAOA(3)
+            params = np.array([0.1, 0.2, 0.3])  # Extra parameter
+            validated = optimizer._validate_and_truncate_params(params)
+            self.assertEqual(len(validated), 2, "Parameters not truncated correctly")
+            self.assertTrue(np.all(validated <= 2*np.pi), "Parameters not bounded correctly")
+
+        except Exception as e:
+            logger.error(f"Backend initialization test failed: {str(e)}")
+            raise
+
+    def test_circuit_creation(self):
+        """Test quantum circuit creation and validation."""
+        try:
+            n_qubits = 3
+            optimizer = QiskitQAOA(n_qubits)
+
+            # Test with valid cost terms
+            cost_terms = [
+                (1.0, (0, 1)),
+                (0.5, (1, 2))
+            ]
+            params = np.array([0.1, 0.2])
+
+            circuit = optimizer._create_circuit(params, cost_terms)
+            self.assertIsNotNone(circuit, "Circuit creation failed")
+            self.assertEqual(circuit.num_qubits, n_qubits, "Incorrect number of qubits")
+
+            # Test with invalid indices
+            invalid_terms = [(1.0, (0, n_qubits))]  # Out of bounds
+            circuit = optimizer._create_circuit(params, invalid_terms)
+            self.assertIsNotNone(circuit, "Circuit should be created even with invalid terms")
+
+            # Test parameter bounds
+            extreme_params = np.array([10.0, -5.0])
+            validated = optimizer._validate_and_truncate_params(extreme_params)
+            self.assertTrue(np.all(np.abs(validated) <= 2*np.pi), "Parameters not properly bounded")
+
+        except Exception as e:
+            logger.error(f"Circuit creation test failed: {str(e)}")
+            raise
+
+    def test_expectation_values(self):
+        """Test expectation value computation with detailed validation."""
+        try:
+            n_qubits = 2
+            optimizer = QiskitQAOA(n_qubits)
+
+            # Simple test case with known parameters
+            cost_terms = [(1.0, (0, 1))]
+            params = np.array([0.0, np.pi/4])  # Simple parameters
+
+            measurements = optimizer.get_expectation_values(params, cost_terms)
+            self.assertEqual(len(measurements), n_qubits, "Incorrect measurement size")
+            self.assertTrue(np.all(np.abs(measurements) <= 1.0), "Invalid measurement values")
+
+            # Test empty cost terms
+            empty_measurements = optimizer.get_expectation_values(params, [])
+            self.assertEqual(len(empty_measurements), n_qubits, "Incorrect handling of empty terms")
+
+            # Log measurement statistics
+            logger.info(f"Measurement results: {measurements}")
+            logger.info(f"Measurement statistics - Mean: {np.mean(measurements):.4f}, Std: {np.std(measurements):.4f}")
+
+        except Exception as e:
+            logger.error(f"Expectation value test failed: {str(e)}")
+            raise
+
+    def test_partition_handling(self):
+        """Test partition handling for different problem sizes."""
+        try:
+            # Test small problem (no partitioning needed)
+            n_small = 3
+            optimizer_small = QiskitQAOA(n_small)
+            cost_terms_small = [(1.0, (0, 1)), (0.5, (1, 2))]
+
+            # Test large problem (requires partitioning)
+            n_large = 35
+            optimizer_large = QiskitQAOA(n_large)
+
+            # Create cost terms for large problem
+            cost_terms_large = []
+            for i in range(0, n_large-1, 2):
+                cost_terms_large.append((1.0, (i, i+1)))
+
+            # Test both cases
+            params = np.array([0.1, 0.2])
+
+            # Small case
+            measurements_small = optimizer_small.get_expectation_values(params, cost_terms_small)
+            self.assertEqual(len(measurements_small), n_small, "Incorrect small case measurements")
+
+            # Large case
+            measurements_large = optimizer_large.get_expectation_values(params, cost_terms_large)
+            self.assertEqual(len(measurements_large), n_large, "Incorrect large case measurements")
+
+            # Log partition statistics
+            logger.info(f"Small case measurements shape: {measurements_small.shape}")
+            logger.info(f"Large case measurements shape: {measurements_large.shape}")
+            logger.info(f"Large case partition count: {optimizer_large.n_partitions}")
+
+        except Exception as e:
+            logger.error(f"Partition handling test failed: {str(e)}")
+            raise
+
+    def test_error_handling(self):
+        """Test error handling and recovery."""
+        try:
+            optimizer = QiskitQAOA(3)
+
+            # Test invalid parameters
+            invalid_params = np.array([])
+            validated = optimizer._validate_and_truncate_params(invalid_params)
+            self.assertEqual(len(validated), 2, "Invalid parameter handling failed")
+
+            # Test invalid cost terms
+            invalid_terms = [(1.0, (0, 10))]  # Index out of bounds
+            measurements = optimizer.get_expectation_values(np.array([0.1, 0.2]), invalid_terms)
+            self.assertIsNotNone(measurements, "Error recovery failed")
+
+            # Test extreme values
+            extreme_params = np.array([1e6, -1e6])
+            validated = optimizer._validate_and_truncate_params(extreme_params)
+            self.assertTrue(np.all(np.isfinite(validated)), "Extreme value handling failed")
+
+        except Exception as e:
+            logger.error(f"Error handling test failed: {str(e)}")
+            raise
 
     def test_coordinate_parsing(self):
         """Test coordinate string parsing functionality."""

@@ -1,19 +1,17 @@
 import numpy as np
-from qiskit import QuantumCircuit, transpile, QuantumRegister
-from qiskit_aer import AerSimulator, Aer, noise
+from qiskit import QuantumCircuit, transpile
+from qiskit_aer import AerSimulator
 from qiskit.circuit import Parameter
-from qiskit.primitives import BackendEstimator
+from qiskit.primitives import Estimator
 from qiskit.quantum_info import SparsePauliOp
 import logging
 from typing import List, Tuple, Optional
-from qiskit.transpiler import PassManager
-from qiskit.circuit.library import QFT
 
 logger = logging.getLogger(__name__)
 
 class QiskitQAOA:
     def __init__(self, n_qubits: int, depth: int = 1):
-        """Initialize QAOA circuit with fixed 2-parameter system and large-scale support."""
+        """Initialize QAOA circuit with fixed 2-parameter system and strict validation."""
         try:
             self.n_qubits = n_qubits
             self.depth = 1  # Force depth to 1 to maintain 2-parameter system
@@ -21,32 +19,21 @@ class QiskitQAOA:
             # Initialize parameters array with validation
             self.params = np.array([0.0, 0.0])  # [gamma, beta]
 
-            # Configuration for large-scale execution
-            self.max_partition_size = 31  # Maximum qubits per partition for Qiskit Aer
+            # Maximum qubits per partition for Qiskit Aer
+            self.max_partition_size = 31
             self.n_partitions = (n_qubits + self.max_partition_size - 1) // self.max_partition_size
 
             logger.info(f"Initializing QiskitQAOA with {n_qubits} qubits across {self.n_partitions} partitions")
+            logger.info(f"Maximum partition size: {self.max_partition_size}")
 
-            # Initialize backend with optimized configuration
-            backend_options = {
-                'method': 'statevector',
-                'device': 'GPU',
-                'max_parallel_threads': 16,
-                'max_parallel_experiments': 16,
-                'precision': 'double',
-                'max_memory_mb': 32768
-            }
-
-            self.backend = AerSimulator(**backend_options)
-
-            # Initialize estimator without run_options (removed due to incompatibility)
-            self.estimator = BackendEstimator(
-                backend=self.backend,
-                skip_transpilation=False,
-                bound_pass_manager=True
-            )
-
-            logger.info("Successfully initialized QiskitQAOA backend with parallel execution support")
+            # Initialize backend and estimator with minimal configuration
+            try:
+                self.backend = AerSimulator()
+                self.estimator = Estimator()  # Use basic Estimator instead of BackendEstimator
+                logger.info("Successfully initialized QiskitQAOA backend")
+            except Exception as e:
+                logger.error(f"Error initializing Qiskit backend: {str(e)}")
+                raise
 
         except Exception as e:
             logger.error(f"Failed to initialize QiskitQAOA: {str(e)}")
@@ -57,140 +44,131 @@ class QiskitQAOA:
         if not isinstance(params, np.ndarray):
             params = np.array(params)
 
-        # Always ensure exactly 2 parameters
         if len(params) != 2:
             logger.warning(f"Parameter validation: truncating from length {len(params)} to 2")
             params = params[:2]
 
-        # Clip parameters to valid ranges
+        # Ensure parameters are within bounds
         params[0] = np.clip(params[0], -2*np.pi, 2*np.pi)  # gamma
         params[1] = np.clip(params[1], -np.pi, np.pi)      # beta
 
         return params
 
     def get_expectation_values(self, params, cost_terms):
-        """Get expectation values with parallel partition execution."""
+        """Get expectation values with enhanced partition handling and validation."""
         try:
             # Strict parameter validation
             params = self._validate_and_truncate_params(params)
             gamma, beta = params
             logger.info(f"Computing expectation values with gamma={gamma:.4f}, beta={beta:.4f}")
 
-            # Partition the circuit and cost terms
-            partitioned_results = self._execute_partitioned_circuits(params, cost_terms)
+            # Validate and partition cost terms
+            if not cost_terms:
+                logger.warning("No cost terms provided")
+                return np.zeros(self.n_qubits)
 
-            # Combine results from all partitions
-            combined_measurements = np.zeros(self.n_qubits)
-            for partition_idx, measurements in partitioned_results.items():
-                start_idx = partition_idx * self.max_partition_size
-                end_idx = min(start_idx + self.max_partition_size, self.n_qubits)
-                combined_measurements[start_idx:end_idx] = measurements[:end_idx-start_idx]
+            # Split problem into partitions if needed
+            if self.n_qubits <= self.max_partition_size:
+                # Handle small problems without partitioning
+                circuit = self._create_circuit(params, cost_terms)
+                if circuit is None:
+                    return np.zeros(self.n_qubits)
 
-            return combined_measurements
+                try:
+                    # Create simple observables
+                    observables = []
+                    for i in range(self.n_qubits):
+                        pauli_str = ''.join(['I'] * i + ['Z'] + ['I'] * (self.n_qubits - i - 1))
+                        observables.append(SparsePauliOp(pauli_str))
+
+                    # Execute circuit with simple error handling
+                    values = []
+                    for obs in observables:
+                        try:
+                            result = self.estimator.run(
+                                circuits=[circuit],
+                                observables=[obs],
+                            ).result()
+                            values.extend(result.values)
+                        except Exception as e:
+                            logger.error(f"Error in measurement: {str(e)}")
+                            values.append(0.0)
+
+                    return np.array(values)
+
+                except Exception as e:
+                    logger.error(f"Error in circuit execution: {str(e)}")
+                    return np.zeros(self.n_qubits)
+            else:
+                # Handle large problems with partitioning
+                logger.info(f"Problem size exceeds maximum, using {self.n_partitions} partitions")
+                measurements = np.zeros(self.n_qubits)
+
+                partitioned_terms = self._partition_cost_terms(cost_terms)
+                for partition_idx, partition_costs in partitioned_terms.items():
+                    start_idx = partition_idx * self.max_partition_size
+                    end_idx = min(start_idx + self.max_partition_size, self.n_qubits)
+                    n_partition_qubits = end_idx - start_idx
+
+                    circuit = self._create_circuit(params, partition_costs, n_qubits=n_partition_qubits)
+                    if circuit is None:
+                        measurements[start_idx:end_idx] = np.zeros(n_partition_qubits)
+                        continue
+
+                    try:
+                        # Execute partition with error handling
+                        obs_values = []
+                        for i in range(n_partition_qubits):
+                            pauli_str = ''.join(['I'] * i + ['Z'] + ['I'] * (n_partition_qubits - i - 1))
+                            obs = SparsePauliOp(pauli_str)
+                            try:
+                                result = self.estimator.run(
+                                    circuits=[circuit],
+                                    observables=[obs],
+                                ).result()
+                                obs_values.extend(result.values)
+                            except Exception as e:
+                                logger.error(f"Error in partition {partition_idx} measurement: {str(e)}")
+                                obs_values.append(0.0)
+
+                        measurements[start_idx:end_idx] = obs_values[:n_partition_qubits]
+
+                    except Exception as e:
+                        logger.error(f"Error in partition {partition_idx} execution: {str(e)}")
+                        measurements[start_idx:end_idx] = np.zeros(n_partition_qubits)
+
+                return measurements
 
         except Exception as e:
             logger.error(f"Error computing expectation values: {str(e)}")
             return np.zeros(self.n_qubits)
 
-    def _execute_partitioned_circuits(self, params, cost_terms):
-        """Execute circuits in parallel partitions."""
+    def _create_circuit(self, params, cost_terms, n_qubits=None):
+        """Create quantum circuit with enhanced validation and error handling."""
         try:
-            partition_results = {}
-            partition_circuits = []
-            partition_costs = self._partition_cost_terms(cost_terms)
-
-            # Create circuits for each partition
-            for partition_idx, partition_costs in partition_costs.items():
-                start_idx = partition_idx * self.max_partition_size
-                end_idx = min(start_idx + self.max_partition_size, self.n_qubits)
-                n_partition_qubits = end_idx - start_idx
-
-                circuit = self._create_partition_circuit(
-                    params, partition_costs, n_partition_qubits, partition_idx
-                )
-                if circuit:
-                    partition_circuits.append((partition_idx, circuit))
-
-            # Execute all partition circuits in parallel
-            if partition_circuits:
-                circuits = [circuit for _, circuit in partition_circuits]
-                observables = []
-
-                # Create observables for each partition
-                for _, circuit in partition_circuits:
-                    for i in range(circuit.num_qubits):
-                        pauli_str = ''.join(['I'] * i + ['Z'] + ['I'] * (circuit.num_qubits - i - 1))
-                        observables.append(SparsePauliOp(pauli_str))
-
-                # Execute all measurements in parallel
-                try:
-                    jobs = []
-                    for circuit, obs in zip(circuits, observables):
-                        job = self.estimator.run(
-                            circuits=[circuit],
-                            observables=[obs],
-                            parameter_values=None
-                        )
-                        jobs.append(job)
-
-                    # Collect results
-                    results = {}
-                    for (partition_idx, _), job in zip(partition_circuits, jobs):
-                        if partition_idx not in results:
-                            results[partition_idx] = []
-                        result = job.result()
-                        results[partition_idx].extend(result.values)
-
-                    # Package results by partition
-                    for partition_idx, values in results.items():
-                        partition_results[partition_idx] = values
-
-                except Exception as e:
-                    logger.error(f"Error in parallel circuit execution: {str(e)}")
-                    for partition_idx, _ in partition_circuits:
-                        partition_results[partition_idx] = [0.0] * self.max_partition_size
-
-            return partition_results
-
-        except Exception as e:
-            logger.error(f"Error executing partitioned circuits: {str(e)}")
-            return {0: [0.0] * self.max_partition_size}
-
-    def _partition_cost_terms(self, cost_terms):
-        """Partition cost terms for parallel execution."""
-        partitioned_costs = {}
-        for coeff, (i, j) in cost_terms:
-            partition_i = i // self.max_partition_size
-            partition_j = j // self.max_partition_size
-
-            if partition_i == partition_j:  # Same partition
-                if partition_i not in partitioned_costs:
-                    partitioned_costs[partition_i] = []
-                # Adjust indices for partition
-                local_i = i % self.max_partition_size
-                local_j = j % self.max_partition_size
-                partitioned_costs[partition_i].append((coeff, (local_i, local_j)))
-
-        return partitioned_costs
-
-    def _create_partition_circuit(self, params, partition_costs, n_qubits, partition_idx):
-        """Create optimized circuit for a partition."""
-        try:
-            if not partition_costs:
+            if not cost_terms:
+                logger.warning("No cost terms provided for circuit creation")
                 return None
 
-            # Strict parameter validation
+            # Use provided n_qubits or default to self.n_qubits
+            n_qubits = n_qubits if n_qubits is not None else self.n_qubits
+
+            # Validate parameters
             params = self._validate_and_truncate_params(params)
             gamma, beta = params
 
+            # Create and validate circuit
             circuit = QuantumCircuit(n_qubits)
 
             # Initial state preparation
             circuit.h(range(n_qubits))
 
-            # Apply cost Hamiltonian
-            for coeff, (i, j) in partition_costs:
-                if 0 <= i < n_qubits and 0 <= j < n_qubits:
+            # Apply cost Hamiltonian with strict bounds checking
+            for coeff, (i, j) in cost_terms:
+                if not (0 <= i < n_qubits and 0 <= j < n_qubits):
+                    continue
+
+                try:
                     angle = 2 * gamma * coeff
                     if i != j:
                         circuit.cx(i, j)
@@ -198,153 +176,63 @@ class QiskitQAOA:
                         circuit.cx(i, j)
                     else:
                         circuit.rz(angle, i)
+                except Exception as e:
+                    logger.error(f"Error applying cost gates at indices ({i}, {j}): {str(e)}")
+                    continue
 
-            # Apply mixer Hamiltonian
-            for i in range(n_qubits):
-                circuit.rx(2 * beta, i)
+            # Apply mixer Hamiltonian with validation
+            try:
+                circuit.rx(2 * beta, range(n_qubits))
+            except Exception as e:
+                logger.error(f"Error applying mixer gates: {str(e)}")
+                return None
 
-            logger.debug(f"Created partition circuit {partition_idx} with {n_qubits} qubits")
             return circuit
 
         except Exception as e:
-            logger.error(f"Error creating partition circuit: {str(e)}")
+            logger.error(f"Error creating quantum circuit: {str(e)}")
             return None
 
-    def _apply_cost_hamiltonian(self, circuit, gamma, cost_terms):
-        """Apply cost Hamiltonian with detailed logging."""
+    def _partition_cost_terms(self, cost_terms):
+        """Partition cost terms with enhanced validation and bounds checking."""
         try:
-            logger.debug(f"Applying cost Hamiltonian with gamma={gamma:.4f}")
-            term_count = 0
+            if not cost_terms:
+                logger.warning("No cost terms provided")
+                return {}
 
+            partitioned_costs = {}
+            for i in range(self.n_partitions):
+                start_idx = i * self.max_partition_size
+                end_idx = min(start_idx + self.max_partition_size, self.n_qubits)
+                partitioned_costs[i] = []
+
+            # Process and validate each cost term
             for coeff, (i, j) in cost_terms:
-                if 0 <= i < self.n_qubits and 0 <= j < self.n_qubits:
-                    angle = 2 * gamma * coeff
-                    if i != j:
-                        circuit.cx(i, j)
-                        circuit.rz(angle, j)
-                        circuit.cx(i, j)
-                    else:
-                        circuit.rz(angle, i)
-                    term_count += 1
-
-            logger.debug(f"Applied {term_count} cost terms")
-
-        except Exception as e:
-            logger.error(f"Error in cost Hamiltonian application: {str(e)}")
-            raise
-
-    def _apply_mixer_hamiltonian(self, circuit, beta):
-        """Apply mixer Hamiltonian with detailed logging."""
-        try:
-            logger.debug(f"Applying mixer Hamiltonian with beta={beta:.4f}")
-            for i in range(self.n_qubits):
-                circuit.rx(2 * beta, i)
-            logger.debug(f"Applied mixer terms to {self.n_qubits} qubits")
-
-        except Exception as e:
-            logger.error(f"Error in mixer Hamiltonian application: {str(e)}")
-            raise
-
-    def _prepare_initial_state(self, circuit):
-        """Prepare initial state with batched operations."""
-        batch_size = 4
-        for i in range(0, circuit.num_qubits, batch_size):
-            batch = range(i, min(i + batch_size, circuit.num_qubits))
-            circuit.h(batch)
-
-    def optimize(self, cost_terms: List[Tuple], steps: int = 100):
-        """Run optimization with strict parameter validation."""
-        try:
-            # Initialize with exactly 2 parameters
-            params = np.array([
-                np.random.uniform(-0.1, 0.1),        # gamma
-                np.random.uniform(np.pi/4, np.pi/2)  # beta
-            ])
-
-            # Ensure initial parameters are valid
-            params = self._validate_and_truncate_params(params)
-            logger.info(f"Starting optimization with parameters: {params}")
-
-            costs = []
-            best_params = None
-            best_cost = float('inf')
-            no_improvement_count = 0
-            min_improvement = 1e-4
-
-            def cost_function(p):
-                """Compute cost with error handling."""
-                try:
-                    # Explicitly validate and truncate parameters
-                    p = self._validate_and_truncate_params(p)
-                    logger.debug(f"Cost function received parameters: {p}")
-                    measurements = self.get_expectation_values(p, cost_terms)
-                    cost = sum(coeff * measurements[i] * measurements[j]
-                              for coeff, (i, j) in cost_terms)
-                    return float(cost)
-                except Exception as e:
-                    logger.error(f"Error in cost function: {str(e)}")
-                    return float('inf')
-
-            # Optimize with adaptive learning rate
-            alpha = 0.1  # Initial learning rate
-            alpha_decay = 0.995
-            alpha_min = 0.01
-
-            for step in range(steps):
-                try:
-                    # Ensure parameters are valid before evaluation
-                    params = self._validate_and_truncate_params(params)
-                    current_cost = cost_function(params)
-                    costs.append(current_cost)
-
-                    if current_cost < best_cost:
-                        improvement = (best_cost - current_cost) / abs(best_cost) if best_cost != float('inf') else 1.0
-                        if improvement > min_improvement:
-                            best_cost = current_cost
-                            best_params = params.copy()
-                            no_improvement_count = 0
-                            logger.info(f"Step {step}: New best cost = {current_cost:.6f}")
-                        else:
-                            no_improvement_count += 1
-                    else:
-                        no_improvement_count += 1
-
-                    if no_improvement_count >= 20:
-                        logger.info(f"Early stopping at step {step}")
-                        break
-
-                    # Compute gradient with error handling and parameter validation
-                    eps = max(1e-4, alpha * 0.1)
-                    grad = np.zeros(2)  # Only compute gradient for 2 parameters
-                    for i in range(2):
-                        params_plus = params.copy()
-                        params_plus[i] += eps
-                        params_plus = self._validate_and_truncate_params(params_plus)
-                        cost_plus = cost_function(params_plus)
-                        if cost_plus != float('inf'):
-                            grad[i] = (cost_plus - current_cost) / eps
-
-                    # Update parameters with bounded values
-                    grad_norm = np.linalg.norm(grad)
-                    if grad_norm > 1.0:
-                        grad = grad / grad_norm
-
-                    params -= alpha * grad
-                    params = self._validate_and_truncate_params(params)
-                    alpha = max(alpha_min, alpha * alpha_decay)
-
-                except Exception as e:
-                    logger.error(f"Error in optimization step {step}: {str(e)}")
+                if not (0 <= i < self.n_qubits and 0 <= j < self.n_qubits):
+                    logger.warning(f"Skipping invalid indices: ({i}, {j})")
                     continue
 
-            final_params = best_params if best_params is not None else params
-            final_params = self._validate_and_truncate_params(final_params)
-            logger.info(f"Optimization complete with final parameters: gamma={final_params[0]:.4f}, beta={final_params[1]:.4f}")
-            return final_params, costs
+                partition_i = i // self.max_partition_size
+                partition_j = j // self.max_partition_size
+
+                if partition_i == partition_j:
+                    local_i = i % self.max_partition_size
+                    local_j = j % self.max_partition_size
+                    partition_costs = partitioned_costs[partition_i]
+
+                    # Convert to local indices
+                    start_idx = partition_i * self.max_partition_size
+                    end_idx = min(start_idx + self.max_partition_size, self.n_qubits)
+                    partition_size = end_idx - start_idx
+
+                    if local_i < partition_size and local_j < partition_size:
+                        partition_costs.append((coeff, (local_i, local_j)))
+
+            return partitioned_costs
 
         except Exception as e:
-            logger.error(f"Error during optimization: {str(e)}")
-            raise
+            logger.error(f"Error partitioning cost terms: {str(e)}")
+            return {}
 
     def _add_cross_partition_interactions(self, circuit, params, cost_terms):
         """Add minimal necessary interactions between partitions."""
@@ -373,7 +261,6 @@ class QiskitQAOA:
 
         except Exception as e:
             logger.error(f"Error adding cross-partition interactions: {str(e)}")
-
 
     def _apply_error_mitigation(self, circuit: QuantumCircuit) -> QuantumCircuit:
         """Apply advanced error mitigation techniques with dynamic adaptation."""
@@ -685,3 +572,138 @@ class QiskitQAOA:
         except Exception as e:
             logger.error(f"Error creating QAOA circuit: {str(e)}")
             return None
+    def _apply_cost_hamiltonian(self, circuit, gamma, cost_terms):
+        """Apply cost Hamiltonian with detailed logging."""
+        try:
+            logger.debug(f"Applying cost Hamiltonian with gamma={gamma:.4f}")
+            term_count = 0
+
+            for coeff, (i, j) in cost_terms:
+                if 0 <= i < self.n_qubits and 0 <= j < self.n_qubits:
+                    angle = 2 * gamma * coeff
+                    if i != j:
+                        circuit.cx(i, j)
+                        circuit.rz(angle, j)
+                        circuit.cx(i, j)
+                    else:
+                        circuit.rz(angle, i)
+                    term_count += 1
+
+            logger.debug(f"Applied {term_count} cost terms")
+
+        except Exception as e:
+            logger.error(f"Error in cost Hamiltonian application: {str(e)}")
+            raise
+
+    def _apply_mixer_hamiltonian(self, circuit, beta):
+        """Apply mixer Hamiltonian with detailed logging."""
+        try:
+            logger.debug(f"Applying mixer Hamiltonian with beta={beta:.4f}")
+            for i in range(self.n_qubits):
+                circuit.rx(2 * beta, i)
+            logger.debug(f"Applied mixer terms to {self.n_qubits} qubits")
+
+        except Exception as e:
+            logger.error(f"Error in mixer Hamiltonian application: {str(e)}")
+            raise
+
+    def _prepare_initial_state(self, circuit):
+        """Prepare initial state with batched operations."""
+        batch_size = 4
+        for i in range(0, circuit.num_qubits, batch_size):
+            batch = range(i, min(i + batch_size, circuit.num_qubits))
+            circuit.h(batch)
+
+    def optimize(self, cost_terms: List[Tuple], steps: int = 100):
+        """Run optimization with strict parameter validation."""
+        try:
+            # Initialize with exactly 2 parameters
+            params = np.array([
+                np.random.uniform(-0.1, 0.1),        # gamma
+                np.random.uniform(np.pi/4, np.pi/2)  # beta
+            ])
+
+            # Ensure initial parameters are valid
+            params = self._validate_and_truncate_params(params)
+            logger.info(f"Starting optimization with parameters: {params}")
+
+            costs = []
+            best_params = None
+            best_cost = float('inf')
+            no_improvement_count = 0
+            min_improvement = 1e-4
+
+            def cost_function(p):
+                """Compute cost with error handling."""
+                try:
+                    # Explicitly validate and truncate parameters
+                    p = self._validate_and_truncate_params(p)
+                    logger.debug(f"Cost function received parameters: {p}")
+                    measurements = self.get_expectation_values(p, cost_terms)
+                    cost = sum(coeff * measurements[i] * measurements[j]
+                              for coeff, (i, j) in cost_terms)
+                    return float(cost)
+                except Exception as e:
+                    logger.error(f"Error in cost function: {str(e)}")
+                    return float('inf')
+
+            # Optimize with adaptive learning rate
+            alpha = 0.1  # Initial learning rate
+            alpha_decay = 0.995
+            alpha_min = 0.01
+
+            for step in range(steps):
+                try:
+                    # Ensure parameters are valid before evaluation
+                    params = self._validate_and_truncate_params(params)
+                    current_cost = cost_function(params)
+                    costs.append(current_cost)
+
+                    if current_cost < best_cost:
+                        improvement = (best_cost - current_cost) / abs(best_cost) if best_cost != float('inf') else 1.0
+                        if improvement > min_improvement:
+                            best_cost = current_cost
+                            best_params = params.copy()
+                            no_improvement_count = 0
+                            logger.info(f"Step {step}: New best cost = {current_cost:.6f}")
+                        else:
+                            no_improvement_count += 1
+                    else:
+                        no_improvement_count += 1
+
+                    if no_improvement_count >= 20:
+                        logger.info(f"Early stopping at step {step}")
+                        break
+
+                    # Compute gradient with error handling and parameter validation
+                    eps = max(1e-4, alpha * 0.1)
+                    grad = np.zeros(2)  # Only compute gradient for 2 parameters
+                    for i in range(2):
+                        params_plus = params.copy()
+                        params_plus[i] += eps
+                        params_plus = self._validate_and_truncate_params(params_plus)
+                        cost_plus = cost_function(params_plus)
+                        if cost_plus != float('inf'):
+                            grad[i] = (cost_plus - current_cost) / eps
+
+                    # Update parameters with bounded values
+                    grad_norm = np.linalg.norm(grad)
+                    if grad_norm > 1.0:
+                        grad = grad / grad_norm
+
+                    params -= alpha * grad
+                    params = self._validate_and_truncate_params(params)
+                    alpha = max(alpha_min, alpha * alpha_decay)
+
+                except Exception as e:
+                    logger.error(f"Error in optimization step {step}: {str(e)}")
+                    continue
+
+            final_params = best_params if best_params is not None else params
+            final_params = self._validate_and_truncate_params(final_params)
+            logger.info(f"Optimization complete with final parameters: gamma={final_params[0]:.4f}, beta={final_params[1]:.4f}")
+            return final_params, costs
+
+        except Exception as e:
+            logger.error(f"Error during optimization: {str(e)}")
+            raise

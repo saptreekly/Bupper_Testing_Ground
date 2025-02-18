@@ -16,8 +16,8 @@ class QAOAOptimizer:
                 learning_rate: float = 0.05, tolerance: float = 1e-5) -> Tuple[np.ndarray, List[float]]:
         try:
             # Initialize parameters
-            params = qml.numpy.array(np.random.uniform(0, 2*np.pi, self.n_params), requires_grad=True)
-            optimizer = qml.AdamOptimizer(stepsize=learning_rate)
+            params = np.array([0.01, 0.1], dtype=float)  # Start with small values
+            optimizer = qml.GradientDescentOptimizer(stepsize=learning_rate)
             cost_history = []
 
             def cost_function(params):
@@ -29,9 +29,9 @@ class QAOAOptimizer:
                     # Calculate cost from measurements
                     cost = 0.0
                     for coeff, (i, j) in cost_terms:
-                        cost += coeff * measurements[i] * measurements[j]
+                        cost += float(coeff) * float(measurements[i]) * float(measurements[j])
 
-                    return cost
+                    return float(cost)
 
                 except Exception as e:
                     self.logger.error("Error in cost function: %s", str(e))
@@ -40,26 +40,19 @@ class QAOAOptimizer:
             prev_cost = float('inf')
             for iteration in range(max_iterations):
                 try:
-                    # One optimization step with parameter update
+                    # One optimization step
                     params, current_cost = optimizer.step_and_cost(cost_function, params)
-
-                    # Convert cost value for history
-                    if hasattr(current_cost, 'numpy'):
-                        history_cost = float(current_cost.numpy())
-                    else:
-                        history_cost = float(current_cost)
-
-                    cost_history.append(history_cost)
+                    cost_history.append(float(current_cost))
 
                     # Log progress
-                    self.logger.info("Iteration %d: Cost = %.6f", iteration, history_cost)
+                    self.logger.info("Iteration %d: Cost = %.6f", iteration, current_cost)
 
                     # Check convergence
-                    if abs(prev_cost - history_cost) < tolerance:
+                    if abs(prev_cost - current_cost) < tolerance:
                         self.logger.info("Optimization converged within tolerance")
                         break
 
-                    prev_cost = history_cost
+                    prev_cost = current_cost
 
                 except Exception as e:
                     self.logger.error("Error in optimization step %d: %s", iteration, str(e))
@@ -83,10 +76,8 @@ class QAOAOptimizer:
             # Calculate final cost using measurements
             cost = 0.0
             for coeff, (i, j) in cost_terms:
-                cost += coeff * measurements[i] * measurements[j]
+                cost += float(coeff) * float(measurements[i]) * float(measurements[j])
 
-            if hasattr(cost, 'numpy'):
-                cost = float(cost.numpy())
             return float(cost)
 
         except Exception as e:

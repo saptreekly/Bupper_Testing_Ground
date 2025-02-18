@@ -1,6 +1,5 @@
 import logging
 from qaoa_core import QAOACircuit
-from qiskit_qaoa import QiskitQAOA
 from qubo_formulation import QUBOFormulation
 from circuit_visualization import CircuitVisualizer
 from street_network import StreetNetwork
@@ -166,13 +165,13 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
     try:
         # Calculate total qubits needed
         total_qubits = n_cities * n_cities * n_vehicles
-        max_qubits = 25 if backend == 'pennylane' else 50  # Different limits for different backends
+        max_qubits = 25  # PennyLane quantum device limit
 
         if total_qubits > max_qubits:
-            raise ValueError(f"Problem size too large: {total_qubits} qubits required, but maximum is {max_qubits} for {backend} backend. Please reduce number of cities or vehicles.")
+            raise ValueError(f"Problem size too large: {total_qubits} qubits required, but maximum is {max_qubits}. Please reduce number of cities or vehicles.")
 
         if progress_callback:
-            progress_callback("Initializing street network", {"status": "Generating city locations"})
+            progress_callback(0, {"status": "Initializing street network", "progress": 0.1})
 
         coordinates, nodes, network = generate_street_network_cities(n_cities, place_name)
         demands = generate_random_demands(n_cities)
@@ -188,54 +187,44 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         logger.info(f"Problem size metrics: {metrics['problem_size']}")
 
         if progress_callback:
-            progress_callback("Creating QUBO matrix", {"status": "Formulating optimization problem"})
+            progress_callback(0, {"status": "Creating QUBO matrix", "progress": 0.2})
 
         start_time = time.time()
         qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)
         metrics['qubo_formation_time'] = time.time() - start_time
         metrics['qubo_sparsity'] = np.count_nonzero(qubo_matrix) / (qubo_matrix.size)
-        logger.info(f"QUBO formation metrics - Time: {metrics['qubo_formation_time']:.3f}s, Sparsity: {metrics['qubo_sparsity']:.3f}")
 
         if progress_callback:
-            progress_callback("Generating cost terms", {"status": "Processing quantum parameters"})
+            progress_callback(0, {"status": "Generating cost terms", "progress": 0.3})
 
         start_time = time.time()
         n_qubits = n_cities * n_cities * n_vehicles
         cost_terms = []
         max_coeff = np.max(np.abs(qubo_matrix))
         mean_coeff = np.mean(np.abs(qubo_matrix[np.nonzero(qubo_matrix)]))
-        threshold = mean_coeff * 0.01  # More aggressive threshold for larger problems
+        threshold = mean_coeff * 0.01
 
         for i in range(n_qubits):
             for j in range(i + 1, n_qubits):
                 if abs(qubo_matrix[i, j]) > threshold:
                     cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
 
-            if i % 100 == 0 and progress_callback:
-                progress = i / n_qubits
-                progress_callback("Processing quantum parameters", 
-                                {"status": f"Processed {i}/{n_qubits} qubits ({progress:.1%})"})
+                if progress_callback and i % 100 == 0:
+                    progress = 0.3 + (0.2 * i / n_qubits)
+                    progress_callback(0, {"status": f"Processing quantum parameters", "progress": progress})
 
         metrics['cost_terms_generation_time'] = time.time() - start_time
         metrics['n_cost_terms'] = len(cost_terms)
         metrics['cost_terms_density'] = len(cost_terms) / (n_qubits * (n_qubits - 1) / 2)
-        logger.info(f"Generated {len(cost_terms)} cost terms with density {metrics['cost_terms_density']:.3f}")
 
         if progress_callback:
-            progress_callback("Initializing quantum circuit", 
-                            {"status": f"Using {backend} backend with {'hybrid' if hybrid else 'pure quantum'} optimization"})
+            progress_callback(0, {"status": "Initializing quantum circuit", "progress": 0.5})
 
         circuit_start = time.time()
         if hybrid:
-            circuit = HybridOptimizer(n_qubits, depth=min(2, n_cities//2), backend=backend, n_vehicles=n_vehicles)
-            logger.info(f"Initialized hybrid optimizer with {backend} backend")
+            circuit = HybridOptimizer(n_qubits, depth=min(2, n_cities//2))
         else:
-            if backend == 'qiskit':
-                circuit = QiskitQAOA(n_qubits, depth=min(2, n_cities//2))
-                logger.info(f"Initialized qiskit circuit with {n_qubits} qubits")
-            else:
-                circuit = QAOACircuit(n_qubits, depth=min(2, n_cities//2))
-                logger.info(f"Initialized {backend} circuit with {n_qubits} qubits")
+            circuit = QAOACircuit(n_qubits, depth=min(2, n_cities//2))
 
         metrics['circuit_initialization_time'] = time.time() - circuit_start
 
@@ -244,19 +233,44 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
 
         def optimization_callback(step, data):
             if progress_callback:
-                progress = data.get('progress', 0)
-                progress_callback("Optimizing quantum circuit", 
-                                {"status": f"Step {step}/{steps} ({progress:.1%})", 
-                                 "cost": float(data.get('cost', 0))})
+                progress = 0.5 + (0.5 * step / steps)
+                current_cost = data.get('cost', 0)
+                progress_callback(step, {
+                    "status": f"Optimizing quantum circuit",
+                    "progress": progress,
+                    "step": step,
+                    "total_steps": steps,
+                    "cost": current_cost
+                })
 
-        # Backend-specific optimization with progress updates
-        params, costs = circuit.optimize(cost_terms, steps=steps, callback=optimization_callback)
+        # Optimization with callback
+        costs = []
+        best_cost = float('inf')
+        params = None
+
+        for step in range(steps):
+            try:
+                current_params, current_cost = circuit.optimize(cost_terms, step=1)
+                costs.append(current_cost)
+
+                if current_cost < best_cost:
+                    best_cost = current_cost
+                    params = current_params
+
+                optimization_callback(step, {
+                    "cost": current_cost,
+                    "best_cost": best_cost,
+                    "progress": step / steps
+                })
+
+            except Exception as e:
+                logger.error(f"Error in optimization step {step}: {str(e)}")
+                continue
 
         metrics['optimization_time'] = time.time() - optimization_start
-        logger.info(f"Optimization completed in {metrics['optimization_time']:.3f}s")
 
         if progress_callback:
-            progress_callback("Computing final routes", {"status": "Decoding quantum solution"})
+            progress_callback(steps, {"status": "Computing final routes", "progress": 0.9})
 
         solution_start = time.time()
         measurements = circuit.get_expectation_values(params, cost_terms)
@@ -287,7 +301,7 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         metrics['final_cost'] = costs[-1]
 
         if progress_callback:
-            progress_callback("Computing classical benchmark", {"status": "Comparing with classical solution"})
+            progress_callback(steps, {"status": "Computing classical benchmark", "progress": 0.95})
 
         classical_start = time.time()
         _, classical_length = clarke_wright_savings(distance_matrix, demands, 
@@ -296,8 +310,9 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         metrics['quantum_classical_gap'] = (total_length - classical_length) / classical_length
 
         if progress_callback:
-            progress_callback("Optimization complete", {
-                "status": "Done",
+            progress_callback(steps, {
+                "status": "Optimization complete",
+                "progress": 1.0,
                 "total_time": f"{metrics['total_time']:.1f}s",
                 "quantum_advantage": f"{-metrics['quantum_classical_gap']:.1%}"
             })
@@ -307,7 +322,7 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
     except Exception as e:
         logger.error(f"Error in benchmark optimization: {str(e)}", exc_info=True)
         if progress_callback:
-            progress_callback("Error", {"error": str(e), "status": "Failed"})
+            progress_callback(0, {"error": str(e), "status": "Failed"})
         raise
 
 def generate_street_network_cities(n_cities: int, place_name: str = "San Francisco, California, USA") -> Tuple[List[Tuple[float, float]], List[int], StreetNetwork]:
@@ -327,8 +342,8 @@ def main():
         parser.add_argument('--vehicles', type=int, default=1, help='Number of vehicles (default: 1)')
         parser.add_argument('--capacity', type=float, default=10.0, help='Vehicle capacity (default: 10.0)')
         parser.add_argument('--non-interactive', action='store_true', help='Run in non-interactive mode')
-        parser.add_argument('--backend', choices=['pennylane', 'qiskit'], default='qiskit',
-                          help='Choose quantum backend (default: qiskit)')
+        parser.add_argument('--backend', choices=['pennylane'], default='pennylane',
+                          help='Choose quantum backend (default: pennylane)')
         parser.add_argument('--hybrid', action='store_true',
                           help='Use hybrid quantum-classical optimization')
         parser.add_argument('--benchmark', action='store_true',
@@ -340,7 +355,7 @@ def main():
         if args.benchmark:
             logger.info("\nRunning benchmarking suite...")
             problem_sizes = [(3, 1), (4, 1), (5, 1)]
-            backends = ['qiskit', 'pennylane']
+            backends = ['pennylane']
             all_metrics = []
 
             visualizer = CircuitVisualizer()
@@ -428,7 +443,7 @@ def main():
 
         # Calculate total qubits and validate size upfront
         total_qubits = n_cities * n_cities * n_vehicles
-        max_qubits = 25 if args.backend == 'pennylane' else 50
+        max_qubits = 25 
 
         if total_qubits > max_qubits:
             logger.error(
@@ -483,14 +498,9 @@ def main():
 
         start_time = time.time()
         if args.hybrid:
-            circuit = HybridOptimizer(total_qubits, depth=qaoa_depth, backend=args.backend)
-            logger.info(f"Initialized hybrid optimizer with {args.backend} backend")
+            circuit = HybridOptimizer(total_qubits, depth=qaoa_depth)
         else:
-            if args.backend == 'qiskit':
-                circuit = QiskitQAOA(total_qubits, depth=qaoa_depth)
-            else:
-                circuit = QAOACircuit(total_qubits, depth=qaoa_depth)
-            logger.info(f"Initialized {args.backend} circuit with {total_qubits} qubits")
+            circuit = QAOACircuit(total_qubits, depth=qaoa_depth)
 
         logger.info("Creating QUBO matrix...")
         qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)
@@ -517,11 +527,7 @@ def main():
 
         try:
             params, costs = circuit.optimize(cost_terms, steps=10)
-            if args.backend == 'qiskit':
-                measurements = circuit.get_expectation_values(params, cost_terms)
-            else:
-                measurements = circuit.circuit(params, cost_terms)
-
+            measurements = circuit.get_expectation_values(params, cost_terms)
             binary_solution = decode_measurements(measurements, n_cities)
             routes = qubo.decode_solution(binary_solution)
             quantum_time = time.time() - start_time

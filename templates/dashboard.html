@@ -149,7 +149,10 @@
 
     <div class="optimization-overlay" id="optimization-overlay">
         <div class="optimization-content">
-            <h3>Optimization Progress</h3>
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h3>Optimization Progress</h3>
+                <button type="button" class="btn-close" aria-label="Close" onclick="closeOptimizationOverlay()"></button>
+            </div>
             <div id="optimization-status">Initializing optimization...</div>
 
             <div class="progress-container">
@@ -281,6 +284,25 @@
     </div>
 
     <script>
+        // Add this function near the top of the script section
+        function closeOptimizationOverlay() {
+            document.getElementById('optimization-overlay').style.display = 'none';
+            document.getElementById('loading-overlay').style.display = 'none';
+
+            // Reset the optimization state
+            document.getElementById('progress-log').innerHTML = '';
+            document.getElementById('current-step').textContent = '-';
+            document.getElementById('current-cost').textContent = '-';
+            document.getElementById('best-cost').textContent = '-';
+            document.getElementById('optimization-progress').style.width = '0%';
+            document.getElementById('optimization-status').innerHTML = 'Initializing optimization...';
+
+            // Reset live optimization chart
+            Plotly.update('live-optimization-chart', {
+                y: [[]]
+            });
+        }
+
         // Socket connection with error handling and logging
         let socket = null;
 
@@ -540,6 +562,8 @@
 
         // Initialize charts on page load
         document.addEventListener('DOMContentLoaded', initializeCharts);
+
+
     </script>
 </body>
 </html>

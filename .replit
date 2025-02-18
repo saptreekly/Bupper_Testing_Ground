@@ -103,7 +103,7 @@ task = "packager.installForAll"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python example.py --cities 4 --vehicles 2 --location 'San Francisco, California, USA' --backend qiskit --hybrid"
+args = "python example.py --cities 4 --vehicles 2 --location \"San Francisco, California, USA\" --backend qiskit --hybrid"
 
 [[workflows.workflow]]
 name = "Flask Server"

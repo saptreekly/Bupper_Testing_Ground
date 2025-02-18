@@ -196,103 +196,101 @@ def optimize():
             # Generate map files
             if metrics and 'network' in metrics and 'nodes' in metrics:
                 routes = metrics.get('routes', [])
-                if routes:
-                    logger.info(f"Raw routes received: {routes}")
+                try:
+                    if routes:
+                        logger.info(f"Raw routes received: {routes}")
 
-                    # Improved multi-vehicle route processing
-                    node_routes = []
-                    for vehicle_idx, route in enumerate(routes):
-                        if route:  # Only process non-empty routes
-                            vehicle_route = [metrics['nodes'][i] for i in route]
-                            node_routes.append(vehicle_route)
-                            logger.info(f"Vehicle {vehicle_idx + 1} route: {vehicle_route}")
+                        node_routes = []
+                        for vehicle_idx, route in enumerate(routes):
+                            logger.info(f"Processing route for vehicle {vehicle_idx + 1}: {route}")
+                            if route:  # Only process non-empty routes
+                                vehicle_route = [metrics['nodes'][i] for i in route]
+                                node_routes.append(vehicle_route)
+                                logger.info(f"Vehicle {vehicle_idx + 1} processed route: {vehicle_route}")
+                            else:
+                                logger.warning(f"Empty route received for vehicle {vehicle_idx + 1}")
+                                node_routes.append([])  # Add empty route to maintain vehicle index
 
-                    logger.info(f"All node routes generated: {node_routes}")
+                        logger.info(f"All node routes generated: {node_routes}")
+                        logger.info(f"Number of vehicles: {n_vehicles}")
+                        logger.info(f"Number of routes: {len(node_routes)}")
 
-                    # Log coordinates for verification
-                    for vehicle_idx, route in enumerate(node_routes):
-                        coords = metrics['network'].get_node_coordinates([node for node in route])
-                        logger.info(f"Vehicle {vehicle_idx + 1} route coordinates: {coords}")
+                        # Ensure we have exactly n_vehicles routes
+                        if len(node_routes) < n_vehicles:
+                            logger.warning(f"Expected {n_vehicles} routes but only got {len(node_routes)}")
+                            # Pad with empty routes if necessary
+                            while len(node_routes) < n_vehicles:
+                                node_routes.append([])
+                                logger.info(f"Added empty route, now have {len(node_routes)} routes")
 
-                    map_filename = f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities"
+                        # Use different colors for each vehicle's route
+                        route_colors = ['red', 'blue', 'green', 'purple', 'orange']
 
-                    # Ensure static directory exists and is writable
-                    os.makedirs('static', exist_ok=True)
+                        # Log route details before visualization
+                        for i, route in enumerate(node_routes):
+                            color = route_colors[i % len(route_colors)]
+                            if route:
+                                logger.info(f"Route {i+1}: {len(route)} nodes, color: {color}")
+                            else:
+                                logger.warning(f"Route {i+1} is empty, color would be: {color}")
 
-                    # Create both HTML and PNG versions with multiple route colors
-                    map_path = os.path.join('static', f"{map_filename}.html")
-                    png_path = os.path.join('static', f"{map_filename}.png")
+                        map_filename = f"route_map_{backend}_{'hybrid' if hybrid else 'pure'}_{n_cities}cities"
 
-                    logger.info(f"Generating map files at: {map_path} and {png_path}")
+                        # Create both HTML and PNG versions with multiple route colors
+                        os.makedirs('static', exist_ok=True)
+                        map_path = os.path.join('static', f"{map_filename}.html")
+                        png_path = os.path.join('static', f"{map_filename}.png")
 
-                    # Use different colors for each vehicle's route
-                    route_colors = ['red', 'blue', 'green', 'purple', 'orange']  # Add more colors if needed
+                        logger.info(f"Generating map files at: {map_path} and {png_path}")
 
-                    # Ensure we have at least n_vehicles routes
-                    if len(node_routes) < n_vehicles:
-                        logger.warning(f"Expected {n_vehicles} routes but only got {len(node_routes)}")
-                        # Pad with empty routes if necessary
-                        while len(node_routes) < n_vehicles:
-                            node_routes.append([])
+                        metrics['network'].create_folium_map(
+                            node_routes,
+                            save_path=map_path,
+                            route_colors=route_colors[:n_vehicles]
+                        )
+                        metrics['network'].create_static_map(
+                            node_routes,
+                            save_path=png_path,
+                            route_colors=route_colors[:n_vehicles]
+                        )
 
-                    # Create colored routes list
-                    colored_routes = []
-                    for i in range(n_vehicles):
-                        if i < len(node_routes) and node_routes[i]:
-                            colored_routes.append((node_routes[i], route_colors[i % len(route_colors)]))
-                            logger.info(f"Route {i+1} color: {route_colors[i % len(route_colors)]}")
+                        if os.path.exists(map_path) and os.path.exists(png_path):
+                            logger.info("Map files generated successfully")
+                            logger.info(f"HTML file size: {os.path.getsize(map_path)} bytes")
+                            logger.info(f"PNG file size: {os.path.getsize(png_path)} bytes")
+                        else:
+                            logger.error("Failed to generate map files")
+                            return jsonify({
+                                'success': False,
+                                'error': 'Failed to generate map files'
+                            }), 500
+                except Exception as route_error:
+                    logger.error(f"Error processing routes: {str(route_error)}")
+                    logger.error(traceback.format_exc())
+                    raise
 
-                    metrics['network'].create_folium_map(
-                        node_routes,
-                        save_path=map_path,
-                        route_colors=route_colors[:n_vehicles]
-                    )
-                    metrics['network'].create_static_map(
-                        node_routes,
-                        save_path=png_path,
-                        route_colors=route_colors[:n_vehicles]
-                    )
-
-                    # Verify files were created
-                    if os.path.exists(map_path) and os.path.exists(png_path):
-                        logger.info(f"Map files generated successfully")
-                        logger.info(f"HTML file size: {os.path.getsize(map_path)} bytes")
-                        logger.info(f"PNG file size: {os.path.getsize(png_path)} bytes")
-                    else:
-                        logger.error(f"Failed to generate map files")
-                        return jsonify({
-                            'success': False,
-                            'error': 'Failed to generate map files'
-                        }), 500
-
-                    # Enhanced metrics for visualization with reduced cost history
-                    serializable_metrics = {
-                        'total_time': float(metrics.get('total_time', 0)),
-                        'solution_length': float(metrics.get('solution_length', 0)),
-                        'quantum_classical_gap': float(metrics.get('quantum_classical_gap', 0)),
-                        'n_routes': int(metrics.get('n_routes', 0)),
-                        'initial_depth': int(metrics.get('initial_circuit_depth', 0)),
-                        'optimized_depth': int(metrics.get('optimized_circuit_depth', 0)),
-                        'cost_history': metrics.get('cost_history', [])[-20:],  # Only last 20 points for visualization
-                        'backend_times': {
-                            'qiskit': float(metrics.get('qiskit_time', 0)),
-                            'pennylane': float(metrics.get('pennylane_time', 0))
-                        }
+                # Enhanced metrics for visualization with reduced cost history
+                serializable_metrics = {
+                    'total_time': float(metrics.get('total_time', 0)),
+                    'solution_length': float(metrics.get('solution_length', 0)),
+                    'quantum_classical_gap': float(metrics.get('quantum_classical_gap', 0)),
+                    'n_routes': int(metrics.get('n_routes', 0)),
+                    'initial_depth': int(metrics.get('initial_circuit_depth', 0)),
+                    'optimized_depth': int(metrics.get('optimized_circuit_depth', 0)),
+                    'cost_history': metrics.get('cost_history', [])[-20:],  # Only last 20 points for visualization
+                    'backend_times': {
+                        'qiskit': float(metrics.get('qiskit_time', 0)),
+                        'pennylane': float(metrics.get('pennylane_time', 0))
                     }
+                }
 
-                    return jsonify({
-                        'success': True,
-                        'task_id': task_id,  # Include task_id in response
-                        'metrics': serializable_metrics,
-                        'map_path': f"/static/{map_filename}.html",
-                        'png_path': f"/static/{map_filename}.png"
-                    })
-                else:
-                    logger.error("No routes found in metrics")
-                    return jsonify({
-                        'success': False,
-                        'error': 'No routes generated'
-                    }), 500
+                return jsonify({
+                    'success': True,
+                    'task_id': task_id,  # Include task_id in response
+                    'metrics': serializable_metrics,
+                    'map_path': f"/static/{map_filename}.html",
+                    'png_path': f"/static/{map_filename}.png"
+                })
             else:
                 logger.error("Missing required data in metrics")
                 return jsonify({

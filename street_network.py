@@ -341,7 +341,7 @@ class StreetNetwork:
                         logger.error(traceback.format_exc())
                         continue
 
-            # Add legend only for routes that were actually plotted
+            # Add legend for all routes (even if some are empty)
             legend_html = '''
                 <div style="position: fixed; 
                             bottom: 50px; right: 50px; 
@@ -353,9 +353,13 @@ class StreetNetwork:
                             box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
                     <p style="margin-bottom:5px;"><strong>Routes:</strong></p>
             '''
-            for i in range(routes_plotted):
+            for i in range(len(routes)):  # Show all possible routes in legend
                 color = colors[i % len(colors)]
-                legend_html += f'<p style="margin:5px 0;"><i style="background: {color};width:20px;height:3px;display:inline-block;margin-right:5px;vertical-align:middle;"></i> Route {i+1}</p>'
+                route = routes[i]
+                if route:
+                    legend_html += f'<p style="margin:5px 0;"><i style="background: {color};width:20px;height:3px;display:inline-block;margin-right:5px;vertical-align:middle;"></i> Route {i+1}</p>'
+                else:
+                    legend_html += f'<p style="margin:5px 0;color:#999;"><i style="background: {color};width:20px;height:3px;display:inline-block;margin-right:5px;vertical-align:middle;opacity:0.3;"></i> Route {i+1} (Empty)</p>'
             legend_html += '</div>'
             m.get_root().html.add_child(folium.Element(legend_html))
 

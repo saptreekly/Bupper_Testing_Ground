@@ -246,26 +246,34 @@ def benchmark_optimization(n_cities: int, n_vehicles: int, place_name: str,
         # Optimization with callback
         costs = []
         best_cost = float('inf')
-        params = None
+        best_params = None
 
-        for step in range(steps):
+        for current_step in range(steps):
             try:
-                current_params, current_cost = circuit.optimize(cost_terms, step=1)
-                costs.append(current_cost)
+                # Perform single optimization step
+                current_params, step_costs = circuit.optimize(cost_terms)
 
-                if current_cost < best_cost:
-                    best_cost = current_cost
-                    params = current_params
+                if len(step_costs) > 0:
+                    current_cost = step_costs[0]
+                    costs.extend(step_costs)
 
-                optimization_callback(step, {
-                    "cost": current_cost,
-                    "best_cost": best_cost,
-                    "progress": step / steps
-                })
+                    if current_cost < best_cost:
+                        best_cost = current_cost
+                        best_params = current_params.copy()
+
+                    if optimization_callback:
+                        optimization_callback(current_step, {
+                            "cost": current_cost,
+                            "best_cost": best_cost,
+                            "progress": current_step / steps
+                        })
 
             except Exception as e:
-                logger.error(f"Error in optimization step {step}: {str(e)}")
+                logger.error(f"Error in optimization step {current_step}: {str(e)}")
                 continue
+
+        # Use best parameters found
+        params = best_params if best_params is not None else np.zeros(2)
 
         metrics['optimization_time'] = time.time() - optimization_start
 

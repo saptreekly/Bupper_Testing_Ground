@@ -29,11 +29,11 @@ args = "QAOA Street Network"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Flask Server"
+args = "QAOA Test"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "QAOA Test"
+args = "Flask Server"
 
 [[workflows.workflow]]
 name = "QAOA Routing Optimizer"
@@ -92,21 +92,6 @@ task = "shell.exec"
 args = "python example.py --cities 5 --vehicles 2 --location \"San Francisco, California, USA\" --backend qiskit --hybrid"
 
 [[workflows.workflow]]
-name = "Flask Server"
-author = "agent"
-
-[workflows.workflow.metadata]
-agentRequireRestartOnSave = false
-
-[[workflows.workflow.tasks]]
-task = "packager.installForAll"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "python app.py"
-waitForPort = 3000
-
-[[workflows.workflow]]
 name = "QAOA Test"
 author = "agent"
 
@@ -119,6 +104,21 @@ task = "packager.installForAll"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python example.py --cities 5 --vehicles 1"
+
+[[workflows.workflow]]
+name = "Flask Server"
+author = "agent"
+
+[workflows.workflow.metadata]
+agentRequireRestartOnSave = false
+
+[[workflows.workflow.tasks]]
+task = "packager.installForAll"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python app.py"
+waitForPort = 5001
 
 [deployment]
 run = ["sh", "-c", "python example.py --cities 5 --vehicles 1"]

@@ -511,24 +511,19 @@ def main():
             circuit = QAOACircuit(total_qubits, depth=qaoa_depth)
 
         logger.info("Creating QUBO matrix...")
-        qubo_matrix = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)
+        try:
+            qubo_matrix, qubo_cost_terms = qubo.create_qubo_matrix(distance_matrix, demands=demands, penalty=2.0)
 
-        cost_terms = []
-        max_coeff = np.max(np.abs(qubo_matrix))
-        threshold = max_coeff * 0.001
-        logger.info(f"Max coefficient: {max_coeff:.6f}, Threshold: {threshold:.6f}")
+            logger.info(f"Generated {len(qubo_cost_terms)} cost terms from QUBO matrix")
+            if len(qubo_cost_terms) == 0:
+                logger.error("No cost terms generated. Check QUBO matrix generation parameters.")
+                return
 
-        n_terms_added = 0
-        for i in range(total_qubits):
-            for j in range(i + 1, total_qubits):
-                if abs(qubo_matrix[i, j]) > threshold:
-                    cost_terms.append((float(qubo_matrix[i, j]), (i, j)))
-                    n_terms_added += 1
-                    logger.debug(f"Added cost term: ({i},{j}) with coefficient {qubo_matrix[i,j]:.6f}")
+            # Use the cost terms directly from QUBO formulation
+            cost_terms = [(float(coeff), (i, j)) for coeff, (i, j) in qubo_cost_terms]
 
-        logger.info("Generated %d cost terms from QUBO matrix", n_terms_added)
-        if n_terms_added == 0:
-            logger.error("No cost terms generated. QUBO matrix might be too sparse or threshold too high.")
+        except Exception as e:
+            logger.error(f"Error creating QUBO matrix: {str(e)}")
             return
 
         logger.info("Starting QAOA optimization...")

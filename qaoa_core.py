@@ -40,30 +40,34 @@ class QAOACircuit:
                     dev = qml.device('default.qubit', wires=partition_size, shots=None)
                     self.devices.append(dev)
 
-                    @qml.qnode(dev)
-                    def circuit(params, cost_terms):
-                        # Initial state preparation
-                        for i in range(partition_size):
-                            qml.Hadamard(wires=i)
+                    # Create circuit with cost_terms as closure
+                    def create_circuit(partition_cost_terms):
+                        @qml.qnode(dev)
+                        def circuit(params):
+                            # Initial state preparation
+                            for i in range(partition_size):
+                                qml.Hadamard(wires=i)
 
-                        # Apply QAOA layers
-                        gamma, beta = params[0], params[1]
+                            # Apply QAOA layers
+                            gamma, beta = params[0], params[1]
 
-                        # Cost Hamiltonian
-                        for coeff, (i, j) in cost_terms:
-                            if i != j and i < partition_size and j < partition_size:
-                                qml.CNOT(wires=[i, j])
-                                qml.RZ(2 * gamma * coeff, wires=j)
-                                qml.CNOT(wires=[i, j])
+                            # Cost Hamiltonian
+                            for coeff, (i, j) in partition_cost_terms:
+                                if i != j and i < partition_size and j < partition_size:
+                                    qml.CNOT(wires=[i, j])
+                                    qml.RZ(2 * gamma * coeff, wires=j)
+                                    qml.CNOT(wires=[i, j])
 
-                        # Mixer Hamiltonian
-                        for i in range(partition_size):
-                            qml.RX(2 * beta, wires=i)
+                            # Mixer Hamiltonian
+                            for i in range(partition_size):
+                                qml.RX(2 * beta, wires=i)
 
-                        # Return expectation values
-                        return [qml.expval(qml.PauliZ(i)) for i in range(partition_size)]
+                            # Return expectation values
+                            return [qml.expval(qml.PauliZ(i)) for i in range(partition_size)]
 
-                    self.circuits.append(circuit)
+                        return circuit
+
+                    self.circuits.append(create_circuit)
                     logger.info(f"Successfully created circuit for partition {i}")
 
                 except Exception as e:
@@ -72,6 +76,33 @@ class QAOACircuit:
 
         except Exception as e:
             logger.error(f"Failed to initialize quantum devices: {str(e)}")
+            raise
+
+    def get_expectation_values(self, params: np.ndarray, cost_terms: List[Tuple]) -> np.ndarray:
+        """Compute expectation values with enhanced error handling."""
+        try:
+            params = self._validate_and_truncate_params(params)
+            measurements = np.zeros(self.n_qubits)
+
+            # Process each partition
+            for partition_idx, partition_costs in self._validate_cost_terms(cost_terms).items():
+                start_idx = partition_idx * self.max_partition_size
+                partition_size = self.partition_sizes[partition_idx]
+
+                try:
+                    # Create circuit with specific cost terms
+                    circuit = self.circuits[partition_idx](partition_costs)
+                    partition_results = circuit(params)
+                    measurements[start_idx:start_idx + partition_size] = partition_results
+
+                except Exception as e:
+                    logger.error(f"Error in partition {partition_idx}: {str(e)}")
+                    measurements[start_idx:start_idx + partition_size] = np.zeros(partition_size)
+
+            return measurements
+
+        except Exception as e:
+            logger.error(f"Error getting expectation values: {str(e)}")
             raise
 
     def optimize(self, cost_terms: List[Tuple], **kwargs) -> Tuple[np.ndarray, List[float]]:
@@ -149,32 +180,6 @@ class QAOACircuit:
 
         except Exception as e:
             logger.error(f"Error during optimization: {str(e)}")
-            raise
-
-    def get_expectation_values(self, params: np.ndarray, cost_terms: List[Tuple]) -> np.ndarray:
-        """Compute expectation values with enhanced error handling."""
-        try:
-            params = self._validate_and_truncate_params(params)
-            measurements = np.zeros(self.n_qubits)
-
-            # Process each partition
-            for partition_idx, partition_costs in self._validate_cost_terms(cost_terms).items():
-                start_idx = partition_idx * self.max_partition_size
-                partition_size = self.partition_sizes[partition_idx]
-
-                try:
-                    circuit = self.circuits[partition_idx]
-                    partition_results = circuit(params, partition_costs)
-                    measurements[start_idx:start_idx + partition_size] = partition_results
-
-                except Exception as e:
-                    logger.error(f"Error in partition {partition_idx}: {str(e)}")
-                    measurements[start_idx:start_idx + partition_size] = np.zeros(partition_size)
-
-            return measurements
-
-        except Exception as e:
-            logger.error(f"Error getting expectation values: {str(e)}")
             raise
 
     def _validate_and_truncate_params(self, params: np.ndarray) -> np.ndarray:

@@ -65,29 +65,40 @@ class QAOACircuit:
         """Optimize QAOA parameters."""
         try:
             logger.info("Starting QAOA optimization")
-            # Initialize parameters
-            params = np.array([0.01, np.pi/4])
+            # Initialize parameters with slightly randomized values
+            params = np.array([np.random.uniform(0.01, 0.1), np.random.uniform(np.pi/8, np.pi/4)])
             costs = []
-            steps = kwargs.get('steps', 10)
+            steps = kwargs.get('steps', 100)  # Increased steps for better convergence
 
             def cost_function(p):
                 try:
                     logger.debug(f"Evaluating cost function for params={p}")
                     measurements = self.get_expectation_values(p, cost_terms)
-                    total_cost = 0.0
+
+                    # Compute energy expectation value
+                    energy = 0.0
                     for coeff, (i, j) in cost_terms:
-                        total_cost += coeff * measurements[i] * measurements[j]
-                    logger.debug(f"Cost function value: {total_cost}")
-                    return float(total_cost)
+                        # Use the product of expectation values
+                        term = 0.25 * coeff * (1 - measurements[i]) * (1 - measurements[j])
+                        energy += term
+
+                    logger.debug(f"Cost function value: {energy}")
+                    return float(energy)
                 except Exception as e:
                     logger.error(f"Error in cost function: {str(e)}", exc_info=True)
                     return float('inf')
 
-            # Simple gradient descent
-            learning_rate = 0.1
+            # Improved gradient descent with momentum
+            learning_rate = 0.05
+            momentum = 0.9
+            velocity = np.zeros_like(params)
+
             current_cost = cost_function(params)
             costs.append(current_cost)
             logger.info(f"Initial cost: {current_cost}")
+
+            best_cost = current_cost
+            best_params = params.copy()
 
             for step in range(steps):
                 try:
@@ -99,19 +110,29 @@ class QAOACircuit:
                     for i in range(2):
                         params_plus = params.copy()
                         params_plus[i] += eps
-                        cost_plus = cost_function(params_plus)
-                        grad[i] = (cost_plus - current_cost) / eps
+                        params_minus = params.copy()
+                        params_minus[i] -= eps
 
-                    # Update parameters
-                    params -= learning_rate * grad
+                        cost_plus = cost_function(params_plus)
+                        cost_minus = cost_function(params_minus)
+
+                        grad[i] = (cost_plus - cost_minus) / (2 * eps)
+
+                    # Update velocity and parameters with momentum
+                    velocity = momentum * velocity - learning_rate * grad
+                    params += velocity
                     params = self._validate_params(params)
 
                     # Compute new cost
                     new_cost = cost_function(params)
                     costs.append(new_cost)
-                    current_cost = new_cost
 
-                    logger.info(f"Step {step+1}: cost={current_cost:.6f}, params={params}")
+                    # Update best solution if needed
+                    if new_cost < best_cost:
+                        best_cost = new_cost
+                        best_params = params.copy()
+
+                    logger.info(f"Step {step+1}: cost={new_cost:.6f}, params={params}")
 
                     if self.progress_callback:
                         self.progress_callback(step, {
@@ -119,15 +140,15 @@ class QAOACircuit:
                             "progress": (step + 1) / steps,
                             "step": step,
                             "total_steps": steps,
-                            "cost": float(current_cost)
+                            "cost": float(new_cost)
                         })
 
                 except Exception as e:
                     logger.error(f"Error in optimization step {step}: {str(e)}", exc_info=True)
                     continue
 
-            logger.info(f"Optimization completed. Final cost: {current_cost:.6f}")
-            return params, costs
+            logger.info(f"Optimization completed. Final cost: {best_cost:.6f}")
+            return best_params, costs
 
         except Exception as e:
             logger.error(f"Error during optimization: {str(e)}", exc_info=True)

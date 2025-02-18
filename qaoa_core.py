@@ -68,19 +68,17 @@ class QAOACircuit:
             # Initialize parameters with slightly randomized values
             params = np.array([np.random.uniform(0.01, 0.1), np.random.uniform(np.pi/8, np.pi/4)])
             costs = []
-            steps = kwargs.get('steps', 100)  # Increased steps for better convergence
+            steps = kwargs.get('steps', 10)  # Decreased steps for faster convergence
 
             def cost_function(p):
                 try:
                     logger.debug(f"Evaluating cost function for params={p}")
                     measurements = self.get_expectation_values(p, cost_terms)
 
-                    # Compute energy expectation value
+                    # Simple cost function based on measurements
                     energy = 0.0
                     for coeff, (i, j) in cost_terms:
-                        # Use the product of expectation values
-                        term = 0.25 * coeff * (1 - measurements[i]) * (1 - measurements[j])
-                        energy += term
+                        energy += coeff * measurements[i] * measurements[j]
 
                     logger.debug(f"Cost function value: {energy}")
                     return float(energy)
@@ -89,9 +87,9 @@ class QAOACircuit:
                     return float('inf')
 
             # Scale learning rate and momentum based on problem size
-            base_learning_rate = 0.05
-            learning_rate = base_learning_rate / np.sqrt(self.n_qubits)
-            momentum = max(0.5, 0.9 - 0.1 * (self.n_qubits / 16))
+            base_learning_rate = 0.01  # Reduced base learning rate
+            learning_rate = base_learning_rate * (1.0 / np.log2(self.n_qubits + 1))  # Gentler scaling
+            momentum = 0.5  # Reduced momentum for stability
             velocity = np.zeros_like(params)
 
             current_cost = cost_function(params)
@@ -101,14 +99,14 @@ class QAOACircuit:
             best_cost = current_cost
             best_params = params.copy()
             no_improvement_count = 0
-            improvement_threshold = 1e-6
+            improvement_threshold = 1e-4  # Relaxed threshold
 
             for step in range(steps):
                 try:
                     logger.debug(f"Optimization step {step+1}/{steps}")
                     # Compute gradient
                     grad = np.zeros(2)
-                    eps = max(1e-4, 1e-6 * np.sqrt(self.n_qubits))  # Scale epsilon with problem size
+                    eps = 1e-4  # Fixed epsilon for stability
 
                     for i in range(2):
                         params_plus = params.copy()
@@ -139,7 +137,7 @@ class QAOACircuit:
                         no_improvement_count += 1
 
                     # Early stopping if no improvement for many steps
-                    if no_improvement_count > 20:
+                    if no_improvement_count > 30:  # Increased patience
                         logger.info("Early stopping due to no improvement")
                         break
 
